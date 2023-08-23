@@ -22,7 +22,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:textAlignment="center"
-            tools:text="Skyline" />
+            tools:text="Strato" />
 
         <TextView
             android:id="@+id/library_url"
@@ -33,7 +33,7 @@
             android:paddingTop="6dp"
             android:textAlignment="center"
             tools:ignore="TouchTargetSizeCheck"
-            tools:text="https://github.com/skyline-emu/skyline" />
+            tools:text="https://github.com/strato-emu/strato" />
 
         <TextView
             android:id="@+id/library_copyright"
@@ -42,7 +42,7 @@
             android:layout_height="wrap_content"
             android:paddingTop="6dp"
             android:textAlignment="center"
-            tools:text="Copyright © 2019-2021\nSkyline Team and Contributors" />
+            tools:text="Copyright © 2019-2023\nStrato Team and Contributors" />
 
         <TextView
             android:id="@+id/license_content"
@@ -55,7 +55,7 @@
             android:paddingTop="15dp"
             android:paddingBottom="15dp"
             android:textAlignment="viewStart"
-            tools:text="@string/mpl2_license" />
+            tools:text="@string/gpl3_license" />
 
     </LinearLayout>
 </androidx.core.widget.NestedScrollView>

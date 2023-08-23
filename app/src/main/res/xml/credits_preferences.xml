@@ -8,10 +8,10 @@
         android:title="@string/licenses"
         app:initialExpandedChildrenCount="5">
         <org.stratoemu.strato.preference.LicensePreference
-            app:libraryCopyright="Copyright © 2019-2021\nSkyline Team and Contributors"
-            app:libraryLicense="@string/mpl2_license"
-            app:libraryUrl="https://github.com/skyline-emu/skyline"
-            app:summary="@string/skyline_license_description"
+            app:libraryCopyright="Copyright © 2019-2023\nStrato Team and Contributors"
+            app:libraryLicense="@string/gpl3_license"
+            app:libraryUrl="https://github.com/strato-emu/strato"
+            app:summary="@string/strato_license_description"
             app:title="@string/app_name" />
         <org.stratoemu.strato.preference.LicensePreference
             app:libraryCopyright="Copyright (c) Ryujinx Team and Contributors"
