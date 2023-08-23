@@ -18,7 +18,7 @@
         android:extractNativeLibs="true"
         android:fullBackupContent="@xml/backup_descriptor"
         android:hasFragileUserData="${shouldSaveUserData}"
-        android:icon="@drawable/logo_skyline"
+        android:icon="@drawable/ic_launcher"
         android:isGame="true"
         android:label="@string/app_name"
         android:localeConfig="@xml/locales_config"
