@@ -13,7 +13,11 @@ namespace skyline::soc::gm20b {
 
 namespace skyline::soc::gm20b::engine::fermi2d {
     /**
-     * @brief The Fermi 2D engine handles perfoming blit and resolve operations
+     * @brief The Fermi 2D engine handles perfoming blit and resolve operations.
+     * It is also capable of basic 2D rendering, however this feature remains unused by games.
+     *
+     * @url https://github.com/devkitPro/deko3d/blob/master/source/maxwell/engine_2d.def
+     * @url https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/twod/cl902d.h
      */
     class Fermi2D : public MacroEngineBase {
       private:
@@ -29,10 +33,46 @@ namespace skyline::soc::gm20b::engine::fermi2d {
       public:
         static constexpr u32 RegisterCount{0xE00}; //!< The number of Fermi 2D registers
 
-        /**
-         * @url https://github.com/devkitPro/deko3d/blob/master/source/maxwell/engine_2d.def
-         */
         #pragma pack(push, 1)
+        enum class NotifyType : u32 {
+            WriteOnly = 0,
+            WriteThenAwaken = 1
+        };
+
+        // TODO: Create a file that stores types shared by engines and move this there
+        enum class MmeShadowRamControl : u32 {
+            MethodTrack = 0, //!< Tracks all writes to registers in shadow RAM
+            MethodTrackWithFilter = 1, //!< Tracks all writes to registers in shadow RAM with a filter
+            MethodPassthrough = 2, //!< Does nothing, no write tracking or hooking
+            MethodReplay = 3, //!< Replays older tracked writes for any new writes to registers, discarding the contents of the new write
+        };
+
+        struct MME {
+            u32 instructionRamPointer;
+            u32 instructionRamLoad;
+            u32 startAddressRamPointer;
+            u32 startAddressRamLoad;
+            MmeShadowRamControl shadowRamControl;
+        };
+
+        struct RenderEnable {
+            enum class Mode : u8 {
+                False = 0,
+                True = 1,
+                Conditional = 2,
+                RenderIfEqual = 3,
+                RenderIfNotEqual = 4
+            };
+
+            Address address;
+            Mode mode : 3;
+            u32 _pad_ : 29;
+        };
+
+        struct MMESwitchState {
+
+        };
+
         union Registers {
             std::array<u32, RegisterCount> raw;
 
@@ -76,6 +116,26 @@ namespace skyline::soc::gm20b::engine::fermi2d {
                     };
                 };
             };
+
+            Register<0x40, u32> nop;
+
+            Register<0x41, Address> notifyAddress;
+            Register<0x43, NotifyType> notifyType;
+
+            Register<0x44, u32> wfi;
+
+            Register<0x45, MME> mme;
+
+            Register<0x4C, RenderEnable> renderEnable;
+
+            Register<0x4F, u32> goIdle;
+
+            Register<0x50, u32> pmTrigger;
+
+            Register<0x54, u32> instrumentationMethodHeader;
+            Register<0x55, u32> instrumentationMethodData;
+
+
 
             Register<0x80, type::Surface> dst;
             Register<0x8C, type::Surface> src;

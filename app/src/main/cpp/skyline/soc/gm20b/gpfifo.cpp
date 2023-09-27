@@ -133,6 +133,7 @@ namespace skyline::soc::gm20b {
                 break;
             case SubchannelId::Copy:
                 channelCtx.maxwellDma.CallMethod(method, argument);
+                break;
             case SubchannelId::TwoD:
                 channelCtx.fermi2D.CallMethod(method, argument);
                 break;
@@ -287,7 +288,7 @@ namespace skyline::soc::gm20b {
                 constexpr u32 BatchCutoff{4}; //!< Cutoff needed to send method calls in a batch which is espcially important for UBO updates. This helps to avoid the extra overhead batching for small packets.
                 // TODO: Only batch for specific target methods like UBO updates, since normal dispatch is generally cheaper
 
-                if (remainingEntries >= methodHeader.methodCount) { [[likely]]
+                if (remainingEntries >= methodHeader.methodCount) [[likely]] {
                     if (methodHeader.Pure()) [[likely]] {
                         if constexpr (State == MethodResumeState::State::NonInc) {
                             // For pure noninc methods we can send all method calls as a span in one go

@@ -17,7 +17,7 @@ namespace skyline::soc::gm20b::engine {
     }
 
     void Inline2MemoryBackend::CompleteDma(Inline2MemoryBackend::RegisterState &state) {
-        if (state.launchDma.completion == RegisterState::DmaCompletionType::ReleaseSemaphore)
+        if (state.launchDma.completion == RegisterState::DmaCompletionType::ReleaseSemaphore) [[unlikely]]
             throw exception("Semaphore release on I2M completion is not supported!");
 
         LOGD("range: 0x{:X} -> 0x{:X}", u64{state.offsetOut}, u64{state.offsetOut} + buffer.size() * 0x4);
@@ -34,13 +34,14 @@ namespace skyline::soc::gm20b::engine {
             gpu::texture::Dimensions srcDimensions{state.lineLengthIn, state.lineCount, state.dstDepth};
 
             gpu::texture::Dimensions dstDimensions{state.dstWidth, state.dstHeight, state.dstDepth};
-            size_t dstSize{GetBlockLinearLayerSize(dstDimensions, 1, 1, 1, 1 << (u8)state.dstBlockSize.height, 1 << (u8)state.dstBlockSize.depth)};
+            size_t dstSize{GetBlockLinearLayerSize(dstDimensions, 1, 1, 1, state.dstBlockSize.Height(), state.dstBlockSize.Depth(), 1)};
 
             auto dstMappings{channelCtx.asCtx->gmmu.TranslateRange(state.offsetOut, dstSize)};
 
             auto inlineCopy{[&](u8 *dst){
                 // The I2M engine only supports a formatBpb of 1
-                if ((srcDimensions.width != dstDimensions.width) || (srcDimensions.height != dstDimensions.height))
+                if ((util::AlignUp(srcDimensions.width, 64) != util::AlignUp(dstDimensions.width, 64)) || (util::AlignUp(srcDimensions.height, state.dstBlockSize.Height() * 8) != util::AlignUp(dstDimensions.height, state.dstBlockSize.Height() * 8)) ||
+                    state.originBytesX || state.originSamplesY)
                     gpu::texture::CopyLinearToBlockLinearSubrect(srcDimensions, dstDimensions,
                                                                  1, 1, 1,
                                                                  state.dstBlockSize.Height(), state.dstBlockSize.Depth(),
@@ -48,9 +49,9 @@ namespace skyline::soc::gm20b::engine {
                                                                  state.originBytesX, state.originSamplesY
                     );
                 else
-                    gpu::texture::CopyLinearToBlockLinear(dstDimensions,
+                    gpu::texture::CopyLinearToBlockLinear(srcDimensions,
                                                           1, 1, 1,
-                                                          state.dstBlockSize.Height(), state.dstBlockSize.Depth(),
+                                                          state.dstBlockSize.Height(), state.dstBlockSize.Depth(), 1,
                                                           span{buffer}.cast<u8>().data(), dst
                     );
             }};
@@ -59,6 +60,7 @@ namespace skyline::soc::gm20b::engine {
                 // We create a temporary buffer to hold the blockLinear texture if mappings are split
                 // NOTE: We don't reserve memory here since such copies on this engine are rarely used
                 std::vector<u8> tempBuffer(dstSize);
+                channelCtx.asCtx->gmmu.Read(span(tempBuffer), state.offsetOut);
 
                 inlineCopy(tempBuffer.data());
 
@@ -70,7 +72,7 @@ namespace skyline::soc::gm20b::engine {
     }
 
     void Inline2MemoryBackend::LoadInlineData(RegisterState &state, u32 value) {
-        if (writeOffset >= buffer.size())
+        if (writeOffset >= buffer.size()) [[unlikely]]
             throw exception("Inline data load overflow!");
 
         buffer[writeOffset++] = value;
@@ -80,7 +82,7 @@ namespace skyline::soc::gm20b::engine {
     }
 
     void Inline2MemoryBackend::LoadInlineData(Inline2MemoryBackend::RegisterState &state, span<u32> data) {
-        if (writeOffset + data.size() > buffer.size())
+        if (writeOffset + data.size() > buffer.size()) [[unlikely]]
             throw exception("Inline data load overflow!");
 
         span(buffer).subspan(writeOffset).copy_from(data);

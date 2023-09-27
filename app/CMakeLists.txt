@@ -18,6 +18,7 @@ set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Ofast")
 
 # libcxxabi
 set(ANDROID_STL "none")
+set(ANDROID_LD "lld")
 set(LIBCXXABI_INCLUDE_TESTS OFF)
 set(LIBCXXABI_ENABLE_SHARED OFF)
 set(LIBCXXABI_ENABLE_ASSERTIONS OFF)
@@ -142,10 +143,14 @@ function(target_link_libraries_system target)
     endforeach (library)
 endfunction(target_link_libraries_system)
 
+set(CMAKE_CXX_FLAGS_DEBUG "-Ofast -flto=full -fno-stack-protector -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Ofast -flto=full -fno-stack-protector -DNDEBUG")
 # yuzu Shader Compiler
 add_subdirectory("libraries/shader-compiler")
 target_include_directories(shader_recompiler PUBLIC "libraries/shader-compiler/include")
 target_link_libraries_system(shader_recompiler Boost::intrusive Boost::container range-v3)
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -glldb -gdwarf-5 -fno-omit-frame-pointer")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O1 -g3 -glldb -gdwarf-5 -fno-omit-frame-pointer -fno-stack-protector")
 
 # yuzu Audio Core
 add_subdirectory("libraries/audio-core")
@@ -184,9 +189,12 @@ add_library(skyline SHARED
         ${source_DIR}/skyline/gpu/memory_manager.cpp
         ${source_DIR}/skyline/gpu/texture_manager.cpp
         ${source_DIR}/skyline/gpu/buffer_manager.cpp
+        ${source_DIR}/skyline/gpu/usage_tracker.cpp
         ${source_DIR}/skyline/gpu/command_scheduler.cpp
         ${source_DIR}/skyline/gpu/descriptor_allocator.cpp
         ${source_DIR}/skyline/gpu/texture/bc_decoder.cpp
+        ${source_DIR}/skyline/gpu/texture/guest_texture.cpp
+        ${source_DIR}/skyline/gpu/texture/host_texture.cpp
         ${source_DIR}/skyline/gpu/texture/texture.cpp
         ${source_DIR}/skyline/gpu/texture/layout.cpp
         ${source_DIR}/skyline/gpu/buffer.cpp

@@ -43,7 +43,7 @@ namespace skyline::gpu::interconnect::kepler_compute {
                     .binding = bindingIndex++,
                     .descriptorType = type,
                     .descriptorCount = desc.count,
-                    .stageFlags = vk::ShaderStageFlagBits::eCompute,
+                    .stageFlags = vk::ShaderStageFlagBits::eCompute
                 });
             }
         }};
@@ -54,12 +54,10 @@ namespace skyline::gpu::interconnect::kepler_compute {
         pushBindings(vk::DescriptorType::eUniformTexelBuffer, stage.info.texture_buffer_descriptors, descriptorInfo.totalTexelBufferDescCount);
         pushBindings(vk::DescriptorType::eStorageTexelBuffer, stage.info.image_buffer_descriptors, descriptorInfo.totalTexelBufferDescCount);
         if (descriptorInfo.totalTexelBufferDescCount > 0)
-            LOGW("Image buffer descriptors are not supported");
+            LOGW("Texel buffer descriptors are not implemented");
 
         pushBindings(vk::DescriptorType::eCombinedImageSampler, stage.info.texture_descriptors, descriptorInfo.totalImageDescCount);
         pushBindings(vk::DescriptorType::eStorageImage, stage.info.image_descriptors, descriptorInfo.totalImageDescCount);
-        if (stage.info.image_descriptors.size() > 0)
-            LOGW("Image descriptors are not supported");
 
         return descriptorInfo;
     }
@@ -89,7 +87,6 @@ namespace skyline::gpu::interconnect::kepler_compute {
             .stage = shaderStageInfo,
             .layout = *pipelineLayout,
         };
-
 
         if (ctx.gpu.traits.quirks.brokenMultithreadedPipelineCompilation)
             ctx.gpu.graphicsPipelineAssembler->WaitIdle();
@@ -194,15 +191,33 @@ namespace skyline::gpu::interconnect::kepler_compute {
         writeImageDescs(vk::DescriptorType::eCombinedImageSampler, shaderStage.info.texture_descriptors,
                         [&](const Shader::TextureDescriptor &desc, size_t arrayIdx) {
                             BindlessHandle handle{ReadBindlessHandle(ctx, constantBuffers, desc, arrayIdx)};
-                            auto binding{GetTextureBinding(ctx, desc,
-                                                           samplers, textures, handle,
-                                                           vk::PipelineStageFlagBits::eComputeShader,
-                                                           srcStageMask, dstStageMask)};
+                            auto binding{GetTextureBinding(ctx, desc, samplers, textures, handle)};
+                            binding.second->RequestSync(ctx.executor, {
+                                .isRead = true,
+                                .isWritten = false,
+                                .usedStage = vk::PipelineStageFlagBits::eComputeShader,
+                                .usedFlags = vk::AccessFlagBits::eShaderRead
+                            });
+
+                            return binding.first;
+                        });
+
+        writeImageDescs(vk::DescriptorType::eStorageImage, shaderStage.info.image_descriptors,
+                        [&](const Shader::ImageDescriptor &desc, size_t arrayIdx) {
+                            BindlessHandle handle{ReadBindlessHandle(ctx, constantBuffers, desc, arrayIdx)};
+                            auto binding{GetStorageTextureBinding(ctx, desc, samplers, textures, handle, desc.format)};
+                            binding.second->RequestSync(ctx.executor, {
+                                .isRead = desc.is_read,
+                                .isWritten = desc.is_written,
+                                .usedStage = vk::PipelineStageFlagBits::eComputeShader,
+                                .usedFlags = (desc.is_read ? vk::AccessFlagBits::eShaderRead : vk::AccessFlags{}) | (desc.is_written ? vk::AccessFlagBits::eShaderWrite : vk::AccessFlags{})
+                            });
+
                             return binding.first;
                         });
 
         // Since we don't implement all descriptor types the number of writes might not match what's expected
-        if (!writeIdx)
+        if (!writeIdx) [[unlikely]]
             return nullptr;
 
         return ctx.executor.allocator->EmplaceUntracked<DescriptorUpdateInfo>(DescriptorUpdateInfo{

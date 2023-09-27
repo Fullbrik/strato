@@ -3,7 +3,7 @@
 // Copyright © 2022 yuzu Emulator Project (https://github.com/yuzu-emu/yuzu/)
 
 #include <gpu/interconnect/command_executor.h>
-#include <gpu/texture/format.h>
+#include <gpu/texture/formats.h>
 #include <gpu/texture/layout.h>
 #include <soc.h>
 #include <soc/gm20b/channel.h>
@@ -38,12 +38,12 @@ namespace skyline::soc::gm20b::engine {
 
     void MaxwellDma::DmaCopy() {
         if (registers.launchDma->multiLineEnable) {
+            channelCtx.executor.Submit();
+
             if (registers.launchDma->remapEnable) [[unlikely]] {
                 LOGW("Remapped DMA copies are unimplemented!");
                 return;
             }
-
-            channelCtx.executor.Submit();
 
             if (registers.launchDma->srcMemoryLayout == registers.launchDma->dstMemoryLayout) [[unlikely]] {
                 // Pitch to Pitch copy
@@ -150,7 +150,7 @@ namespace skyline::soc::gm20b::engine {
         }
 
         gpu::texture::Dimensions srcDimensions{registers.srcSurface->width, registers.srcSurface->height, registers.srcSurface->depth};
-        size_t srcLayerStride{gpu::texture::GetBlockLinearLayerSize(srcDimensions, 1, 1, 1, registers.srcSurface->blockSize.Height(), registers.srcSurface->blockSize.Depth())};
+        size_t srcLayerStride{gpu::texture::GetBlockLinearLayerSize(srcDimensions, 1, 1, 1, registers.srcSurface->blockSize.Height(), registers.srcSurface->blockSize.Depth(), 1)};
         size_t srcLayerAddress{*registers.offsetIn + (registers.srcSurface->layer * srcLayerStride)};
 
         // Get source address
@@ -176,7 +176,7 @@ namespace skyline::soc::gm20b::engine {
                 gpu::texture::CopyBlockLinearToPitch(
                     dstDimensions,
                     1, 1, 1, *registers.pitchOut,
-                    registers.srcSurface->blockSize.Height(), registers.srcSurface->blockSize.Depth(),
+                    registers.srcSurface->blockSize.Height(), registers.srcSurface->blockSize.Depth(), 1,
                     src, dst
                 );
             }
@@ -203,7 +203,7 @@ namespace skyline::soc::gm20b::engine {
         auto srcMappings{channelCtx.asCtx->gmmu.TranslateRange(*registers.offsetIn, srcSize)};
 
         gpu::texture::Dimensions dstDimensions{registers.dstSurface->width, registers.dstSurface->height, registers.dstSurface->depth};
-        size_t dstLayerStride{gpu::texture::GetBlockLinearLayerSize(dstDimensions, 1, 1, 1, registers.dstSurface->blockSize.Height(), registers.dstSurface->blockSize.Depth())};
+        size_t dstLayerStride{gpu::texture::GetBlockLinearLayerSize(dstDimensions, 1, 1, 1, registers.dstSurface->blockSize.Height(), registers.dstSurface->blockSize.Depth(), 1)};
         size_t dstLayerAddress{*registers.offsetOut + (registers.dstSurface->layer * dstLayerStride)};
 
         // Get destination address
@@ -225,7 +225,7 @@ namespace skyline::soc::gm20b::engine {
                 gpu::texture::CopyPitchToBlockLinear(
                     srcDimensions,
                     1, 1, 1, *registers.pitchIn,
-                    registers.dstSurface->blockSize.Height(), registers.dstSurface->blockSize.Depth(),
+                    registers.dstSurface->blockSize.Height(), registers.dstSurface->blockSize.Depth(), 1,
                     src, dst
                 );
             }

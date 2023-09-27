@@ -309,20 +309,30 @@ namespace skyline::kernel {
     }
 
     span<u8> MemoryManager::CreateMirror(span<u8> mapping) {
-        if (!base.contains(mapping)) [[unlikely]]
-            throw exception("Mapping is outside of VMM base: {} - {}", fmt::ptr(mapping.data()), fmt::ptr(mapping.end().base()));
-
         auto offset{static_cast<size_t>(mapping.data() - base.data())};
-        if (!util::IsPageAligned(offset) || !util::IsPageAligned(mapping.size())) [[unlikely]]
-            throw exception("Mapping is not aligned to a page: {} - {} (0x{:X})", fmt::ptr(mapping.data()), fmt::ptr(mapping.end().base()), offset);
 
-        auto mirror{mremap(mapping.data(), 0, mapping.size(), MREMAP_MAYMOVE)};
-        if (mirror == MAP_FAILED) [[unlikely]]
-            throw exception("Failed to create mirror mapping at {} - {} (0x{:X}): {}", fmt::ptr(mapping.data()), fmt::ptr(mapping.end().base()), offset, strerror(errno));
+        if (mapping.data()) [[likely]] {
+            if (!base.contains(mapping)) [[unlikely]]
+                throw exception("Mapping is outside of VMM base: 0x{:X} - 0x{:X}", mapping.data(), mapping.end().base());
 
-        mprotect(mirror, mapping.size(), PROT_READ | PROT_WRITE);
+            if (!util::IsPageAligned(offset) || !util::IsPageAligned(mapping.size())) [[unlikely]]
+                throw exception("Mapping is not aligned to a page: 0x{:X}-0x{:X} (0x{:X})", mapping.data(), mapping.end().base(), offset);
 
-        return span<u8>{reinterpret_cast<u8 *>(mirror), mapping.size()};
+            auto mirror{mremap(mapping.data(), 0, mapping.size(), MREMAP_MAYMOVE)};
+            if (mirror == MAP_FAILED) [[unlikely]]
+                throw exception("Failed to create mirror mapping at 0x{:X}-0x{:X} (0x{:X}): {}", mapping.data(), mapping.end().base(), offset, strerror(errno));
+
+            mprotect(mirror, mapping.size(), PROT_READ | PROT_WRITE);
+            return span<u8>{reinterpret_cast<u8 *>(mirror), mapping.size()};
+        } else [[unlikely]] {
+            Logger::Warn("Tried to create a mirror to unmapped memory!");
+
+            auto mirror{mmap(nullptr, mapping.size(), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_POPULATE, -1, 0)};
+            if (mirror == MAP_FAILED) [[unlikely]]
+                throw exception("Failed to allocate memory for mirror: {}", strerror(errno));
+
+            return span<u8>{reinterpret_cast<u8 *>(mirror), mapping.size()};
+        }
     }
 
     span<u8> MemoryManager::CreateMirrors(const std::vector<span<u8>> &regions) {
@@ -330,24 +340,25 @@ namespace skyline::kernel {
         for (const auto &region : regions)
             totalSize += region.size();
 
-        auto mirrorBase{mmap(nullptr, totalSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)}; // Reserve address space for all mirrors
+
+        auto mirrorBase{mmap(nullptr, totalSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)}; // Reserve address space for all mirrors
         if (mirrorBase == MAP_FAILED) [[unlikely]]
             throw exception("Failed to create mirror base: {} (0x{:X} bytes)", strerror(errno), totalSize);
 
         size_t mirrorOffset{};
         for (const auto &region : regions) {
-            if (!base.contains(region)) [[unlikely]]
-                throw exception("Mapping is outside of VMM base: {} - {}", fmt::ptr(region.data()), fmt::ptr(region.end().base()));
+            // Unmapped GPU AS regions have no cpu address, don't create a mirror for them
+            if (region.data()) {
+                if (!base.contains(region)) [[unlikely]]
+                    throw exception("Mapping is outside of VMM base: 0x{:X} - 0x{:X}", region.data(), region.end().base());
 
-            auto offset{static_cast<size_t>(region.data() - base.data())};
-            if (!util::IsPageAligned(offset) || !util::IsPageAligned(region.size())) [[unlikely]]
-                throw exception("Mapping is not aligned to a page: {} - {} (0x{:X})", fmt::ptr(region.data()), fmt::ptr(region.end().base()), offset);
+                auto offset{static_cast<size_t>(region.data() - base.data())};
+                if (!util::IsPageAligned(offset) || !util::IsPageAligned(region.size())) [[unlikely]]
+                    throw exception("Mapping is not aligned to a page: 0x{:X}-0x{:X} (0x{:X})", region.data(), region.end().base(), offset);
 
-            auto mirror{mremap(region.data(), 0, region.size(), MREMAP_FIXED | MREMAP_MAYMOVE, reinterpret_cast<u8 *>(mirrorBase) + mirrorOffset)};
-            if (mirror == MAP_FAILED) [[unlikely]]
-                throw exception("Failed to create mirror mapping at {} - {} (0x{:X}): {}", fmt::ptr(region.data()), fmt::ptr(region.end().base()), offset, strerror(errno));
-
-            mprotect(mirror, region.size(), PROT_READ | PROT_WRITE);
+                if ((mremap(region.data(), 0, region.size(), MREMAP_FIXED | MREMAP_MAYMOVE, reinterpret_cast<u8 *>(mirrorBase) + mirrorOffset)) == MAP_FAILED) [[unlikely]]
+                    throw exception("Failed to create mirror mapping at 0x{:X}-0x{:X} (0x{:X}): {}", region.data(), region.end().base(), offset, strerror(errno));
+            }
 
             mirrorOffset += region.size();
         }

@@ -6,166 +6,43 @@
 #include <vulkan/vulkan_enums.hpp>
 
 namespace skyline::gpu::interconnect::node {
-    RenderPassNode::RenderPassNode(vk::Rect2D renderArea) : renderArea{renderArea} {}
-
-    u32 RenderPassNode::AddAttachment(TextureView *view, GPU &gpu) {
-        auto vkView{view->GetView()};
-        auto attachment{std::find(attachments.begin(), attachments.end(), vkView)};
-        if (attachment == attachments.end()) {
-            // If we cannot find any matches for the specified attachment, we add it as a new one
-            attachments.push_back(vkView);
-
-            if (gpu.traits.supportsImagelessFramebuffers)
-                attachmentInfo.push_back(vk::FramebufferAttachmentImageInfo{
-                    .flags = view->texture->flags,
-                    .usage = view->texture->usage,
-                    .width = view->texture->dimensions.width,
-                    .height = view->texture->dimensions.height,
-                    .layerCount = view->range.layerCount,
-                    .viewFormatCount = 1,
-                    .pViewFormats = &view->format->vkFormat,
-                });
-
-            attachmentDescriptions.push_back(vk::AttachmentDescription{
-                .format = *view->format,
-                .initialLayout = view->texture->layout,
-                .finalLayout = view->texture->layout,
-                .flags = vk::AttachmentDescriptionFlagBits::eMayAlias
-            });
-
-            if (auto usage{view->texture->GetLastRenderPassUsage()}; usage != texture::RenderPassUsage::None) {
-                vk::PipelineStageFlags attachmentDstStageMask{};
-                if (view->format->vkAspect & vk::ImageAspectFlagBits::eColor)
-                    attachmentDstStageMask |= vk::PipelineStageFlagBits::eColorAttachmentOutput;
-                else if (view->format->vkAspect & (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil))
-                    attachmentDstStageMask |= vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
-
-                dependencyDstStageMask |= attachmentDstStageMask;
-
-                if (usage == texture::RenderPassUsage::RenderTarget)
-                    dependencySrcStageMask |= attachmentDstStageMask;
-                else if (usage == texture::RenderPassUsage::Sampled)
-                    dependencySrcStageMask |= view->texture->GetReadStageMask();
-            }
-
-            return static_cast<u32>(attachments.size() - 1);
-        } else {
-            // If we've got a match from a previous subpass, we need to preserve the attachment till the current subpass
-            auto attachmentIndex{static_cast<u32>(std::distance(attachments.begin(), attachment))};
-
-            auto it{subpassDescriptions.begin()};
-            auto getSubpassAttachmentRange{[this](const vk::SubpassDescription &subpassDescription) {
-                // Find the bounds for the attachment references belonging to the current subpass
-                auto referenceBeginIt{attachmentReferences.begin()};
-                referenceBeginIt += reinterpret_cast<uintptr_t>(subpassDescription.pInputAttachments) / sizeof(vk::AttachmentReference);
-
-                auto referenceEndIt{referenceBeginIt + subpassDescription.inputAttachmentCount + subpassDescription.colorAttachmentCount}; // We depend on all attachments being contiguous for a subpass, this will horribly break if that assumption is broken
-                if (reinterpret_cast<uintptr_t>(subpassDescription.pDepthStencilAttachment) != NoDepthStencil)
-                    referenceEndIt++;
-
-                return std::make_pair(referenceBeginIt, referenceEndIt);
-            }};
-
-            // We want to find the first subpass that utilizes the attachment we want to preserve
-            for (; it != subpassDescriptions.end(); it++) {
-                auto[attachmentReferenceBegin, attachmentReferenceEnd]{getSubpassAttachmentRange(*it)};
-
-                // Iterate over all attachment references in the current subpass to see if they point to our target attachment
-                if (std::find_if(attachmentReferenceBegin, attachmentReferenceEnd, [&](const vk::AttachmentReference &reference) {
-                    return reference.attachment == attachmentIndex;
-                }) != attachmentReferenceEnd)
-                    break;
-            }
-
-            if (it == subpassDescriptions.end())
-                // We assume an attachment is used by the latest subpass if it is not utilized by any past subpasses
-                return attachmentIndex;
-
-            // We want to preserve the attachment for all subpasses till the current subpass
-            auto lastUsageIt{it}; //!< The last subpass that the attachment has been used in for creating a dependency
-            for (; it != subpassDescriptions.end(); it++) {
-                auto[attachmentReferenceBegin, attachmentReferenceEnd]{getSubpassAttachmentRange(*it)};
-
-                if (std::find_if(attachmentReferenceBegin, attachmentReferenceEnd, [&](const vk::AttachmentReference &reference) {
-                    return reference.attachment == attachmentIndex;
-                }) != attachmentReferenceEnd) {
-                    lastUsageIt = it;
-                    continue; // If a subpass uses an attachment then it doesn't need to be preserved
-                }
-
-                auto &subpassPreserveAttachments{preserveAttachmentReferences[static_cast<size_t>(std::distance(subpassDescriptions.begin(), it))]};
-                if (std::find(subpassPreserveAttachments.begin(), subpassPreserveAttachments.end(), attachmentIndex) != subpassPreserveAttachments.end())
-                    subpassPreserveAttachments.push_back(attachmentIndex);
-            }
-
-            // We want to ensure writes to the attachment from the last subpass using it are complete prior to using it in the latest subpass
-            vk::SubpassDependency dependency{
-                .srcSubpass = static_cast<u32>(std::distance(subpassDescriptions.begin(), lastUsageIt)),
-                .dstSubpass = static_cast<uint32_t>(subpassDescriptions.size()), // We assume that the next subpass is using the attachment
-                .dstStageMask = vk::PipelineStageFlagBits::eAllGraphics,
-                .dependencyFlags = vk::DependencyFlagBits::eByRegion,
-            };
-            if (view->format->vkAspect & vk::ImageAspectFlagBits::eColor) {
-                dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-                dependency.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-                dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite;
-            } else if (view->format->vkAspect & (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)) {
-                dependency.srcStageMask = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
-                dependency.srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-                dependency.dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-            }
-
-            if (std::find(subpassDependencies.begin(), subpassDependencies.end(), dependency) == subpassDependencies.end())
-                subpassDependencies.push_back(dependency);
-
-            return attachmentIndex;
-        }
+    RenderPassNode::RenderPassNode(vk::Rect2D renderArea, span<HostTextureView *> pColorAttachments, HostTextureView *pDepthStencilAttachment) : renderArea{renderArea}, colorAttachments{}, depthStencilAttachment{} {
+        BindAttachments(pColorAttachments, pDepthStencilAttachment);
     }
 
-    void RenderPassNode::AddSubpass(span<TextureView *> inputAttachments, span<TextureView *> colorAttachments, TextureView *depthStencilAttachment, GPU &gpu) {
-        attachmentReferences.reserve(attachmentReferences.size() + inputAttachments.size() + colorAttachments.size() + (depthStencilAttachment ? 1 : 0));
+    bool RenderPassNode::BindAttachments(span<HostTextureView *> pColorAttachments, HostTextureView *pDepthStencilAttachment) {
+        size_t subsetAttachmentCount{std::min(colorAttachments.size(), pColorAttachments.size())};
+        bool isColorCompatible{std::equal(colorAttachments.begin(), colorAttachments.begin() + static_cast<ssize_t>(subsetAttachmentCount), pColorAttachments.begin(), pColorAttachments.begin() + static_cast<ssize_t>(subsetAttachmentCount), [](const auto &oldView, const auto &newView) {
+            if (oldView && newView && oldView->view != newView)
+                return false;
+            return true;
+        })};
+        bool isDepthStencilCompatible{!(depthStencilAttachment && pDepthStencilAttachment && depthStencilAttachment->view != pDepthStencilAttachment)};
+        if (!isColorCompatible || !isDepthStencilCompatible)
+            // If the attachments aren't a subset of the existing attachments then we can't bind them
+            return false;
 
-        auto inputAttachmentsOffset{attachmentReferences.size() * sizeof(vk::AttachmentReference)};
-        for (auto &attachment : inputAttachments) {
-            attachmentReferences.push_back(vk::AttachmentReference{
-                .attachment = AddAttachment(attachment, gpu),
-                .layout = attachment->texture->layout,
-            });
+        if (colorAttachments.size() < pColorAttachments.size()) {
+            if (clearValues.size() - 1 == colorAttachments.size()) {
+                clearValues.resize(pColorAttachments.size() + 1);
+                clearValues[pColorAttachments.size()] = clearValues[colorAttachments.size()];
+                clearValues[colorAttachments.size()] = {};
+            }
+
+            colorAttachments.resize(pColorAttachments.size());
         }
 
-        auto colorAttachmentsOffset{attachmentReferences.size() * sizeof(vk::AttachmentReference)}; // Calculate new base offset as it has changed since we pushed the input attachments
-        for (auto &attachment : colorAttachments) {
-            if (attachment)
-                attachmentReferences.push_back(vk::AttachmentReference{
-                    .attachment = AddAttachment(attachment, gpu),
-                    .layout = attachment->texture->layout,
-                });
-            else
-                attachmentReferences.push_back(vk::AttachmentReference{
-                    .attachment = VK_ATTACHMENT_UNUSED,
-                    .layout = vk::ImageLayout::eUndefined,
-                });
+        for (size_t i{}; i < pColorAttachments.size(); ++i) {
+            if (!colorAttachments[i] && pColorAttachments[i])
+                colorAttachments[i] = pColorAttachments[i];
         }
 
-        auto depthStencilAttachmentOffset{attachmentReferences.size() * sizeof(vk::AttachmentReference)};
-        if (depthStencilAttachment) {
-            attachmentReferences.push_back(vk::AttachmentReference{
-                .attachment = AddAttachment(depthStencilAttachment, gpu),
-                .layout = depthStencilAttachment->texture->layout,
-            });
-        }
+        if (!depthStencilAttachment && pDepthStencilAttachment)
+            depthStencilAttachment = pDepthStencilAttachment;
 
-        preserveAttachmentReferences.emplace_back(); // We need to create storage for any attachments that might need to preserved by this pass
+        // Note: No need to change the attachments if the new attachments are a subset of the existing attachments
 
-        // Note: We encode the offsets as the pointers due to vector pointer invalidation, RebasePointer(...) can be utilized to deduce the real pointer
-        subpassDescriptions.push_back(vk::SubpassDescription{
-            .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
-            .inputAttachmentCount = static_cast<u32>(inputAttachments.size()),
-            .pInputAttachments = reinterpret_cast<vk::AttachmentReference *>(inputAttachmentsOffset),
-            .colorAttachmentCount = static_cast<u32>(colorAttachments.size()),
-            .pColorAttachments = reinterpret_cast<vk::AttachmentReference *>(colorAttachmentsOffset),
-            .pDepthStencilAttachment = reinterpret_cast<vk::AttachmentReference *>(depthStencilAttachment ? depthStencilAttachmentOffset : NoDepthStencil),
-        });
+        return true;
     }
 
     void RenderPassNode::UpdateDependency(vk::PipelineStageFlags srcStageMask, vk::PipelineStageFlags dstStageMask) {
@@ -173,92 +50,158 @@ namespace skyline::gpu::interconnect::node {
         dependencyDstStageMask |= dstStageMask;
     }
 
-    bool RenderPassNode::ClearColorAttachment(u32 colorAttachment, const vk::ClearColorValue &value, GPU& gpu) {
-        auto attachmentReference{RebasePointer(attachmentReferences, subpassDescriptions.back().pColorAttachments) + colorAttachment};
-        auto attachmentIndex{attachmentReference->attachment};
-
-        for (const auto &reference : attachmentReferences)
-            if (reference.attachment == attachmentIndex && &reference != attachmentReference)
-                return false;
-
-        auto &attachmentDescription{attachmentDescriptions.at(attachmentIndex)};
-        if (attachmentDescription.loadOp == vk::AttachmentLoadOp::eLoad) {
-            attachmentDescription.loadOp = vk::AttachmentLoadOp::eClear;
-
-            clearValues.resize(attachmentIndex + 1);
-            clearValues[attachmentIndex].color = value;
-
-            return true;
-        } else if (attachmentDescription.loadOp == vk::AttachmentLoadOp::eClear && clearValues[attachmentIndex].color.uint32 == value.uint32) {
-            return true;
-        }
-
-        return false;
+    void RenderPassNode::UpdateSelfDependency(vk::PipelineStageFlags srcStageMask, vk::PipelineStageFlags dstStageMask, vk::AccessFlags srcAccessMask, vk::AccessFlags dstAccessMask) {
+        selfDependencySrcStageMask |= srcStageMask;
+        selfDependencyDstStageMask |= dstStageMask;
+        selfDependencySrcAccessMask |= srcAccessMask;
+        selfDependencyDstAccessMask |= dstAccessMask;
     }
 
-    bool RenderPassNode::ClearDepthStencilAttachment(const vk::ClearDepthStencilValue &value, GPU& gpu) {
-        auto attachmentReference{RebasePointer(attachmentReferences, subpassDescriptions.back().pDepthStencilAttachment)};
-        auto attachmentIndex{attachmentReference->attachment};
+    bool RenderPassNode::ClearColorAttachment(HostTextureView *view, const vk::ClearColorValue &value, GPU &gpu) {
+        u32 attachmentIndex{static_cast<u32>(std::distance(colorAttachments.begin(), std::find_if(colorAttachments.begin(), colorAttachments.end(), [&view = view](auto &other){
+            return other && view == other->view;
+        })))};
+        if (colorAttachments.size() == attachmentIndex)
+            return false;
 
-        for (const auto &reference : attachmentReferences)
-            if (reference.attachment == attachmentIndex && &reference != attachmentReference)
-                return false;
+        auto &attachment{colorAttachments.at(attachmentIndex)};
 
-        auto &attachmentDescription{attachmentDescriptions.at(attachmentIndex)};
-        if (attachmentDescription.loadOp == vk::AttachmentLoadOp::eLoad) {
-            attachmentDescription.loadOp = vk::AttachmentLoadOp::eClear;
-
-            clearValues.resize(attachmentIndex + 1);
-            clearValues[attachmentIndex].depthStencil = value;
-
+        if (attachment && attachment->hasClearValue && clearValues[attachmentIndex].color.uint32 == value.uint32) {
             return true;
-        } else if (attachmentDescription.loadOp == vk::AttachmentLoadOp::eClear && clearValues[attachmentIndex].depthStencil == value) {
+        } else if (attachment && attachment->hasClearValue) {
+            return false;
+        } else {
+            if (clearValues.size() < attachmentIndex + 1)
+                clearValues.resize(attachmentIndex + 1);
+            clearValues[attachmentIndex].color = value;
+            attachment->hasClearValue = true;
             return true;
         }
+    }
 
-        return false;
+    bool RenderPassNode::ClearDepthStencilAttachment(HostTextureView *view, const vk::ClearDepthStencilValue &value, GPU &gpu) {
+        auto &attachment{depthStencilAttachment.value()};
+        u32 attachmentIndex{static_cast<u32>(colorAttachments.size())};
+
+        if (attachment.view != view)
+            return false;
+
+        if (attachment.hasClearValue && (clearValues[attachmentIndex].depthStencil == value)) {
+            return true;
+        } else if (attachment.hasClearValue) {
+            return false;
+        } else {
+            if (clearValues.size() < attachmentIndex + 1)
+                clearValues.resize(attachmentIndex + 1);
+            clearValues[attachmentIndex].depthStencil = value;
+            attachment.hasClearValue = true;
+            return true;
+        }
     }
 
     vk::RenderPass RenderPassNode::operator()(vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &cycle, GPU &gpu) {
-        auto preserveAttachmentIt{preserveAttachmentReferences.begin()};
-        for (auto &subpassDescription : subpassDescriptions) {
-            subpassDescription.pInputAttachments = RebasePointer(attachmentReferences, subpassDescription.pInputAttachments);
-            subpassDescription.pColorAttachments = RebasePointer(attachmentReferences, subpassDescription.pColorAttachments);
+        // TODO: Replace all vector allocations here with a linear allocator
+        std::vector<vk::ImageView> vkAttachments;
+        std::vector<vk::AttachmentReference> attachmentReferences;
+        std::vector<vk::AttachmentDescription> attachmentDescriptions;
+        std::vector<vk::FramebufferAttachmentImageInfo> attachmentInfo;
+        vk::SubpassDependency selfDependency{};
 
-            auto depthStencilAttachmentOffset{reinterpret_cast<uintptr_t>(subpassDescription.pDepthStencilAttachment)};
-            if (depthStencilAttachmentOffset != NoDepthStencil)
-                subpassDescription.pDepthStencilAttachment = RebasePointer(attachmentReferences, subpassDescription.pDepthStencilAttachment);
-            else
-                subpassDescription.pDepthStencilAttachment = nullptr;
+        size_t attachmentCount{colorAttachments.size() + (depthStencilAttachment ? 1 : 0)};
+        vkAttachments.reserve(attachmentCount);
+        attachmentReferences.reserve(attachmentCount);
+        attachmentDescriptions.reserve(attachmentCount);
 
-            subpassDescription.preserveAttachmentCount = static_cast<u32>(preserveAttachmentIt->size());
-            subpassDescription.pPreserveAttachments = preserveAttachmentIt->data();
-            preserveAttachmentIt++;
+        auto addAttachment{[&](const Attachment &attachment) {
+            auto &view{attachment.view};
+            auto &texture{view->hostTexture};
+            vkAttachments.push_back(*view->vkView);
+            if (gpu.traits.supportsImagelessFramebuffers)
+                attachmentInfo.emplace_back(vk::FramebufferAttachmentImageInfo{
+                    .flags = texture->flags,
+                    .usage = texture->usage,
+                    .width = texture->dimensions.width,
+                    .height = texture->dimensions.height,
+                    .layerCount = view->range.layerCount,
+                    .viewFormatCount = 1,
+                    .pViewFormats = &view->format->vkFormat,
+                });
+            attachmentReferences.emplace_back(vk::AttachmentReference{
+                .attachment = static_cast<u32>(attachmentDescriptions.size()),
+                .layout = texture->GetLayout(),
+            });
+            bool hasColorDepth{view->format->vkAspect & (vk::ImageAspectFlagBits::eColor | vk::ImageAspectFlagBits::eDepth)};
+            bool hasStencil{view->format->vkAspect & vk::ImageAspectFlagBits::eStencil};
+            attachmentDescriptions.emplace_back(vk::AttachmentDescription{
+                .format = view->format->vkFormat,
+                .samples = texture->sampleCount,
+                .loadOp = hasColorDepth ? (attachment.hasClearValue ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad) : vk::AttachmentLoadOp::eDontCare,
+                .storeOp = hasColorDepth ? vk::AttachmentStoreOp::eStore : vk::AttachmentStoreOp::eDontCare,
+                .stencilLoadOp = hasStencil ? (attachment.hasClearValue ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad) : vk::AttachmentLoadOp::eDontCare,
+                .stencilStoreOp = hasStencil ? vk::AttachmentStoreOp::eStore : vk::AttachmentStoreOp::eDontCare,
+                .initialLayout = texture->GetLayout(),
+                .finalLayout = texture->GetLayout(),
+            });
+        }};
+
+        for (const auto &attachment : colorAttachments) {
+            if (attachment && attachment->view && attachment->view->texture)
+                addAttachment(*attachment);
+            else if (attachment && attachment->view && !attachment->view->texture) {
+                Logger::Error("Destroyed texture at render pass time!");
+                attachmentReferences.emplace_back(vk::AttachmentReference{
+                    .attachment = VK_ATTACHMENT_UNUSED,
+                    .layout = vk::ImageLayout::eUndefined,
+                });
+            } else
+                attachmentReferences.emplace_back(vk::AttachmentReference{
+                    .attachment = VK_ATTACHMENT_UNUSED,
+                    .layout = vk::ImageLayout::eUndefined,
+                });
         }
 
+        if (depthStencilAttachment)
+            addAttachment(*depthStencilAttachment);
+
+        u32 colorAttachmentCount{static_cast<u32>(colorAttachments.size())};
+        vk::SubpassDescription subpassDescription{
+            .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+            .colorAttachmentCount = colorAttachmentCount,
+            .pColorAttachments = reinterpret_cast<vk::AttachmentReference *>(attachmentReferences.data()),
+            .pDepthStencilAttachment = reinterpret_cast<vk::AttachmentReference *>(depthStencilAttachment ? attachmentReferences.data() + colorAttachmentCount : nullptr),
+        };
+
         if (dependencyDstStageMask && dependencySrcStageMask) {
-            commandBuffer.pipelineBarrier(dependencySrcStageMask, dependencyDstStageMask, {}, {vk::MemoryBarrier{
+            commandBuffer.pipelineBarrier(dependencySrcStageMask, dependencyDstStageMask, {}, vk::MemoryBarrier{
                 .srcAccessMask = vk::AccessFlagBits::eMemoryWrite,
                 .dstAccessMask = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead,
-            }}, {}, {});
+            }, {}, {});
+        }
+
+        if (selfDependencySrcStageMask && selfDependencyDstStageMask) {
+            selfDependency.srcStageMask = selfDependencySrcStageMask;
+            selfDependency.dstStageMask = selfDependencyDstStageMask;
+            selfDependency.srcAccessMask = selfDependencySrcAccessMask;
+            selfDependency.dstAccessMask = selfDependencyDstAccessMask;
+            selfDependency.dependencyFlags = vk::DependencyFlagBits::eByRegion;
         }
 
         auto renderPass{gpu.renderPassCache.GetRenderPass(vk::RenderPassCreateInfo{
             .attachmentCount = static_cast<u32>(attachmentDescriptions.size()),
             .pAttachments = attachmentDescriptions.data(),
-            .subpassCount = static_cast<u32>(subpassDescriptions.size()),
-            .pSubpasses = subpassDescriptions.data(),
-            .dependencyCount = static_cast<u32>(subpassDependencies.size()),
-            .pDependencies = subpassDependencies.data(),
+            .subpassCount = 1,
+            .pSubpasses = &subpassDescription,
+            .dependencyCount = selfDependency.dependencyFlags ? 1U : 0U,
+            .pDependencies = selfDependency.dependencyFlags ? &selfDependency : nullptr
         })};
 
-        auto useImagelessFramebuffer{gpu.traits.supportsImagelessFramebuffers};
+        bool useImagelessFramebuffer{gpu.traits.supportsImagelessFramebuffers};
         cache::FramebufferCreateInfo framebufferCreateInfo{
             vk::FramebufferCreateInfo{
                 .flags = useImagelessFramebuffer ? vk::FramebufferCreateFlagBits::eImageless : vk::FramebufferCreateFlags{},
                 .renderPass = renderPass,
-                .attachmentCount = static_cast<u32>(attachments.size()),
-                .pAttachments = attachments.data(),
+                .attachmentCount = static_cast<u32>(vkAttachments.size()),
+                .pAttachments = vkAttachments.data(),
                 .width = renderArea.extent.width + static_cast<u32>(renderArea.offset.x),
                 .height = renderArea.extent.height + static_cast<u32>(renderArea.offset.y),
                 .layers = 1,
@@ -283,8 +226,8 @@ namespace skyline::gpu::interconnect::node {
                 .pClearValues = clearValues.data(),
             },
             vk::RenderPassAttachmentBeginInfo{
-                .attachmentCount = static_cast<u32>(attachments.size()),
-                .pAttachments = attachments.data(),
+                .attachmentCount = static_cast<u32>(vkAttachments.size()),
+                .pAttachments = vkAttachments.data(),
             }
         };
 
@@ -294,5 +237,10 @@ namespace skyline::gpu::interconnect::node {
         commandBuffer.beginRenderPass(renderPassBeginInfo.get<vk::RenderPassBeginInfo>(), vk::SubpassContents::eInline);
 
         return renderPass;
+    }
+
+    void SyncNode::operator()(vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &cycle, GPU &gpu) {
+        if (active)
+            commandBuffer.pipelineBarrier(srcStages, dstStages, deps, {}, vk::ArrayProxy<vk::BufferMemoryBarrier>(static_cast<u32>(bufferBarriers.size()), bufferBarriers.data()), vk::ArrayProxy<vk::ImageMemoryBarrier>(static_cast<u32>(imageBarriers.size()), imageBarriers.data()));
     }
 }

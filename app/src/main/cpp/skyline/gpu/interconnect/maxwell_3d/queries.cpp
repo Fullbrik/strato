@@ -4,6 +4,7 @@
 #include <gpu.h>
 #include <soc/gm20b/channel.h>
 #include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_enums.hpp>
 #include "queries.h"
 
 namespace skyline::gpu::interconnect::maxwell3d {
@@ -12,75 +13,49 @@ namespace skyline::gpu::interconnect::maxwell3d {
         .queryCount = Counter::QueryPoolSize
     }} {}
 
-    std::function<void(vk::raii::CommandBuffer &, const std::shared_ptr<FenceCycle> &, GPU &)> Queries::Counter::Prepare(InterconnectContext &ctx) {
-        auto currentRenderPassIndex{*ctx.executor.GetRenderPassIndex()};
-        if (ctx.executor.executionTag != lastTag || lastRenderPassIndex != currentRenderPassIndex) {
-            lastTag = ctx.executor.executionTag;
-            lastRenderPassIndex = currentRenderPassIndex;
+    void Queries::Counter::Reset(InterconnectContext &ctx) {
+        usedQueryCount = ctx.executor.allocator->EmplaceUntracked<u32>();
+        queries = ctx.executor.allocator->AllocateUntracked<Query>(Counter::QueryPoolSize);
+        std::memset(queries.data(), 0, queries.size_bytes());
+        recordedCopy = false;
 
-            // Allocate per-RP memory for tracking queries
-            queries = ctx.executor.allocator->AllocateUntracked<Query>(Counter::QueryPoolSize);
-            usedQueryCount = ctx.executor.allocator->EmplaceUntracked<u32>();
-            queryActive = ctx.executor.allocator->EmplaceUntracked<bool>();
-            std::memset(queries.data(), 0, queries.size_bytes());
+        lastTag = ctx.executor.executionTag;
+        lastRenderPassIndex = *ctx.executor.GetRenderPassIndex();
 
-            recordOnNextEnd = true;
-
-            // Reset the query pool up to the final used query count before the current RP begins
-            return [this, usedQueryCountPtr = this->usedQueryCount](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &) {
-                commandBuffer.resetQueryPool(*pool, 0, *usedQueryCountPtr);
-            };
-        }
-
-        return {};
-    }
-
-    //TODO call cmdbuf begin
-    void Queries::Counter::Begin(InterconnectContext &ctx, bool atExecutionStart) {
-        auto prepareFunc{Prepare(ctx)};
-
-        *queryActive = true;
-        (*usedQueryCount)++;
-
-        // Begin the query with the current query count as index
-        auto func{[this, queryIndex = *this->usedQueryCount - 1](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &) {
-            commandBuffer.beginQuery(*pool, queryIndex, vk::QueryControlFlagBits::ePrecise);
-        }};
-
-        if (atExecutionStart) {
-            ctx.executor.InsertPreExecuteCommand(std::move(func));
-
-            if (prepareFunc)
-                ctx.executor.InsertPreExecuteCommand(std::move(prepareFunc));
-        } else {
-            if (prepareFunc)
-                ctx.executor.InsertPreRpCommand(std::move(prepareFunc));
-
-            ctx.executor.AddCommand(std::move(func));
-        }
-    }
-
-    // TODO must be called after begin in cmdbuf
-    void Queries::Counter::Report(InterconnectContext &ctx, BufferView view, std::optional<u64> timestamp) {
-        if (ctx.executor.executionTag != lastTag)
-            Begin(ctx, true);
-
-        // End the query with the current query count as index
-        ctx.executor.AddCommand([=, this, queryIndex = *this->usedQueryCount - 1](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu) {
-            commandBuffer.endQuery(*pool, queryIndex);
+        ctx.executor.InsertPreRpCommand([&pool = pool, usedQueryCount = usedQueryCount](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &){
+            commandBuffer.resetQueryPool(*pool, 0, *usedQueryCount);
         });
+    }
 
-        *queryActive = false;
+    void Queries::Counter::Begin(InterconnectContext &ctx, bool atBegin) {
+        if (atBegin) {
+            ctx.executor.InsertRpBeginCommand([&pool = pool, queriesPtr = queries, usedQueryIndex = (*usedQueryCount) - 1](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu) {
+                if (queriesPtr[usedQueryIndex].view)
+                    commandBuffer.beginQuery(*pool, usedQueryIndex, gpu.traits.supportsPreciseOcclusionQueries ? vk::QueryControlFlagBits::ePrecise : vk::QueryControlFlags{});
+            });
+        } else {
+            ctx.executor.AddCommand([&pool = pool, queriesPtr = queries, usedQueryIndex = (*usedQueryCount) - 1](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu) {
+                if (queriesPtr[usedQueryIndex].view)
+                    commandBuffer.beginQuery(*pool, usedQueryIndex, gpu.traits.supportsPreciseOcclusionQueries ? vk::QueryControlFlagBits::ePrecise : vk::QueryControlFlags{});
+            });
+        }
+    }
+
+    void Queries::Counter::Report(InterconnectContext &ctx, BufferView dst, std::optional<u64> timestamp) {
+        if (lastTag != ctx.executor.executionTag || lastRenderPassIndex != ctx.executor.GetRenderPassIndex()) {
+            Reset(ctx);
+
+            *usedQueryCount = 1;
+            Begin(ctx, true);
+            End(ctx, true);
+        }
 
         // Allocate memory for the timestamp in the megabuffer since updateBuffer can be expensive
         BufferBinding timestampBuffer{timestamp ? ctx.gpu.megaBufferAllocator.Push(ctx.executor.cycle, span<u64>(*timestamp).cast<u8>()) : BufferBinding{}};
-        queries[*usedQueryCount - 1] = {view, timestampBuffer};
+        queries[*usedQueryCount - 1] = {false, dst, timestampBuffer};
 
-        if (recordOnNextEnd) {
-            ctx.executor.InsertPostRpCommand([this, queriesPtr = this->queries, usedQueryCountPtr = this->usedQueryCount, queryActivePtr = this->queryActive](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu) {
-                if (*queryActivePtr)
-                    commandBuffer.endQuery(*pool, *usedQueryCountPtr - 1);
-
+        if (!recordedCopy) {
+            ctx.executor.InsertPostRpCommand([&pool = pool, queriesPtr = queries, usedQueryCountPtr = usedQueryCount](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu) {
                 for (u32 i{}; i < *usedQueryCountPtr; i++) {
                     if (!queriesPtr[i].view)
                         continue;
@@ -88,31 +63,41 @@ namespace skyline::gpu::interconnect::maxwell3d {
                     auto dstBinding{queriesPtr[i].view.GetBinding(gpu)};
                     auto timestampSrcBinding{queriesPtr[i].timestampBinding};
 
-                    commandBuffer.copyQueryPoolResults(*pool, i, 1, dstBinding.buffer, dstBinding.offset, 0, {});
+                    commandBuffer.copyQueryPoolResults(*pool, i, 1, dstBinding.buffer, dstBinding.offset, 0, vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
                     if (timestampSrcBinding)
-                        commandBuffer.copyBuffer(timestampSrcBinding.buffer, dstBinding.buffer, {vk::BufferCopy{
+                        commandBuffer.copyBuffer(timestampSrcBinding.buffer, dstBinding.buffer, vk::BufferCopy {
                             .size = 8,
                             .srcOffset = timestampSrcBinding.offset,
                             .dstOffset = dstBinding.offset + 8
-                        }});
+                        });
                 }
             });
-            recordOnNextEnd = false;
+            recordedCopy = true;
         }
     }
 
-    // TODO must be called after begin in cmdbuf
-    // TODO call at exec end
-    void Queries::Counter::End(InterconnectContext &ctx) {
-        if (ctx.executor.executionTag != lastTag  || !queryActive || !*queryActive)
-            return;
+    void Queries::Counter::Restart(InterconnectContext &ctx) {
+        if (recordedCopy) {
+            End(ctx, false);
+            ++(*usedQueryCount);
+            Begin(ctx, false);
+            End(ctx, true);
+        }
+    }
 
-        // End the query with the current query count as index
-        ctx.executor.AddCommand([=, this, queryIndex = *this->usedQueryCount - 1](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu) {
-            commandBuffer.endQuery(*pool, queryIndex);
-        });
-
-        *queryActive = false;
+    void Queries::Counter::End(InterconnectContext &ctx, bool atEnd) {
+        if (atEnd) {
+            ctx.executor.InsertRpEndCommand([&pool = pool, queriesPtr = queries, usedQueryIndex = (*usedQueryCount) - 1](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu) {
+                if (!queriesPtr[usedQueryIndex].alreadyEnded && queriesPtr[usedQueryIndex].view)
+                    commandBuffer.endQuery(*pool, usedQueryIndex);
+            });
+        } else {
+            queries[(*usedQueryCount) - 1].alreadyEnded = true;
+            ctx.executor.AddCommand([&pool = pool, queriesPtr = queries, usedQueryIndex = (*usedQueryCount) - 1](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu) {
+                if (queriesPtr[usedQueryIndex].view)
+                    commandBuffer.endQuery(*pool, usedQueryIndex);
+            });
+        }
     }
 
     Queries::Queries(GPU &gpu) : counters{{{gpu.vkDevice, vk::QueryType::eOcclusion}}} {}
@@ -121,24 +106,21 @@ namespace skyline::gpu::interconnect::maxwell3d {
         view.Update(ctx, address, timestamp ? 16 : 4);
         usedQueryAddresses.emplace(u64{address});
         ctx.executor.AttachBuffer(*view);
+        view->GetBuffer()->MarkGpuDirty(ctx.executor.usageTracker);
 
         auto &counter{counters[static_cast<u32>(type)]};
-
-        view->GetBuffer()->MarkGpuDirty(ctx.executor.usageTracker);
         counter.Report(ctx, *view, timestamp);
-        counter.Begin(ctx);
     }
 
     void Queries::ResetCounter(InterconnectContext &ctx, CounterType type) {
         auto &counter{counters[static_cast<u32>(type)]};
-        counter.End(ctx);
-        counter.Begin(ctx);
+        counter.Restart(ctx);
     }
 
     void Queries::PurgeCaches(InterconnectContext &ctx) {
         view.PurgeCaches();
         for (u32 i{}; i < static_cast<u32>(CounterType::MaxValue); i++)
-            counters[i].End(ctx);
+            counters[i].Reset(ctx);
     }
 
     bool Queries::QueryPresentAtAddress(soc::gm20b::IOVA address) {

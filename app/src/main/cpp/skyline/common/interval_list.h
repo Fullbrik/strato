@@ -23,7 +23,7 @@ namespace skyline {
 
             Interval(SizeType offset, SizeType end) : offset{offset}, end{end} {}
 
-            Interval(span<u8> interval) : offset{interval.data()}, end{interval.data() + interval.size()} {}
+            Interval(span<u8> interval) : offset{interval.data()}, end{interval.end().base()} {}
         };
 
       private:
@@ -38,16 +38,16 @@ namespace skyline {
         /**
          * @brief Clears all inserted intervals from the map
          */
-        void Clear() {
+        constexpr void Clear() {
             intervals.clear();
         }
 
         /**
          * @brief Forces future accesses to the given interval to use the shadow copy
-        */
+         */
         void Insert(Interval entry) {
-            auto firstIt{std::lower_bound(intervals.begin(), intervals.end(), entry, [](const auto &lhs, const auto &rhs) {
-                return lhs.end < rhs.offset;
+            auto firstIt{std::upper_bound(intervals.begin(), intervals.end(), entry, [](const auto &lhs, const auto &rhs) {
+                return lhs.offset < rhs.end;
             })}; // Lowest offset entry that (maybe) overlaps with the new entry
 
             if (firstIt == intervals.end() || firstIt->offset >= entry.end) {
@@ -58,7 +58,7 @@ namespace skyline {
 
             auto lastIt{firstIt}; // Highest offset entry that overlaps with the new entry
             while (std::next(lastIt) != intervals.end() && std::next(lastIt)->offset < entry.end)
-                lastIt++;
+                ++lastIt;
 
             // Since firstIt and lastIt both are guaranteed to overlap, max them to get the new entry's end
             SizeType end{std::max(std::max(firstIt->end, entry.end), lastIt->end)};
@@ -103,17 +103,11 @@ namespace skyline {
          * @return If the given interval intersects with any of the intervals in the list
          */
         bool Intersect(Interval interval) {
-            SizeType offset{interval.offset};
-            while (offset < interval.end) {
-                if (auto result{Query(offset)}; result.enclosed)
-                    return true;
-                else if (result.size)
-                    offset += result.size;
-                else
-                    return false;
-            }
+            auto it{std::upper_bound(intervals.begin(), intervals.end(), interval, [](const auto &lhs, const auto &rhs) {
+                return lhs.offset < rhs.end;
+            })}; // Lowest offset interval that (maybe) overlaps with the query offset
 
-            return false;
+            return it != intervals.end() && it->offset < interval.end;
         }
     };
 }

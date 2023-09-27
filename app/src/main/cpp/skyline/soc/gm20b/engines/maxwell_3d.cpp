@@ -15,8 +15,8 @@ namespace skyline::soc::gm20b::engine::maxwell3d {
     static gpu::interconnect::maxwell3d::PipelineState::EngineRegisters MakePipelineStateRegisters(const Maxwell3D::Registers &registers) {
         return {
             .pipelineStageRegisters = util::MergeInto<REGTYPE(PipelineStageState), type::PipelineCount>(*registers.pipelines, *registers.programRegion),
-            .colorRenderTargetsRegisters = util::MergeInto<REGTYPE(ColorRenderTargetState), type::ColorTargetCount>(*registers.colorTargets, *registers.surfaceClip),
-            .depthRenderTargetRegisters = {*registers.ztSize, *registers.ztOffset, *registers.ztFormat, *registers.ztBlockSize, *registers.ztArrayPitch, *registers.ztSelect, *registers.ztLayer, *registers.surfaceClip},
+            .colorRenderTargetsRegisters = util::MergeInto<REGTYPE(ColorRenderTargetState), type::ColorTargetCount>(*registers.colorTargets, *registers.surfaceClip, *registers.msaaMode),
+            .depthRenderTargetRegisters = {*registers.ztSize, *registers.ztOffset, *registers.ztFormat, *registers.ztBlockSize, *registers.ztArrayPitch, *registers.ztSelect, *registers.ztLayer, *registers.surfaceClip, *registers.msaaMode},
             .vertexInputRegisters = {*registers.vertexStreams, *registers.vertexStreamInstance, *registers.vertexAttributes},
             .inputAssemblyRegisters = {*registers.primitiveRestartEnable},
             .tessellationRegisters = {*registers.patchSize, *registers.tessellationParameters},
@@ -399,7 +399,7 @@ namespace skyline::soc::gm20b::engine::maxwell3d {
 
                 switch (info.op) {
                     case type::SemaphoreInfo::Op::Release:
-                        channelCtx.executor.AddDeferredAction([=, this, semaphore = *registers.semaphore]() {
+                        channelCtx.executor.AddDeferredAction([this, semaphore = *registers.semaphore]() {
                             WriteSemaphoreResult(semaphore, semaphore.payload);
                         });
                         break;
@@ -407,12 +407,11 @@ namespace skyline::soc::gm20b::engine::maxwell3d {
                     case type::SemaphoreInfo::Op::Counter: {
                         switch (info.counterType) {
                             case type::SemaphoreInfo::CounterType::Zero:
-                                channelCtx.executor.AddDeferredAction([=, this, semaphore = *registers.semaphore]() {
+                                channelCtx.executor.AddDeferredAction([this, semaphore = *registers.semaphore]() {
                                     WriteSemaphoreResult(semaphore, semaphore.payload);
                                 });
                                 break;
                             case type::SemaphoreInfo::CounterType::SamplesPassed:
-                                // Return a fake result for now
                                 interconnect.Query({registers.semaphore->address}, info.counterType,
                                                    registers.semaphore->info.structureSize == type::SemaphoreInfo::StructureSize::FourWords ?
                                                    GetGpuTimeTicks() : std::optional<u64>{});
@@ -439,8 +438,28 @@ namespace skyline::soc::gm20b::engine::maxwell3d {
                 channelCtx.executor.Submit();
             })
 
+            ENGINE_CASE(invalidateSamplerCache, {
+                channelCtx.executor.Submit();
+            })
+
+            ENGINE_CASE(invalidateSamplerCacheNoWfi, {
+                channelCtx.executor.Submit();
+            })
+
             ENGINE_CASE(invalidateTextureHeaderCacheAll, {
                 channelCtx.executor.Submit();
+            })
+
+            ENGINE_CASE(invalidateTextureHeaderCache, {
+                channelCtx.executor.Submit();
+            })
+
+            ENGINE_CASE(invalidateTextureHeaderCacheNoWfi, {
+                channelCtx.executor.Submit();
+            })
+
+            ENGINE_CASE(pixelShaderBarrier, {
+                channelCtx.executor.FinishRenderPass();
             })
 
             // Begin a batch constant buffer update, this case will never be reached if a batch update is currently active

@@ -144,10 +144,23 @@ namespace skyline {
          * @return A vector of non-nullable pointers to entries overlapping with the given interval
          */
         std::vector<std::reference_wrapper<EntryType>> GetRange(Interval interval) {
-            std::vector<std::reference_wrapper<EntryType>> result;
+            std::vector<std::reference_wrapper<EntryType>> result{};
             for (auto entry{std::lower_bound(entries.begin(), entries.end(), interval.end)}; entry != entries.begin() && (--entry)->start < interval.end;)
                 if (entry->end > interval.start && !IsGroupInEntries(entry->group, result))
                     result.emplace_back(entry->group->value);
+
+            return result;
+        }
+
+        /**
+         * @return A vector of non-nullable pointers to entries overlapping with the given intervals
+         */
+        std::vector<std::reference_wrapper<EntryType>> GetRange(const std::vector<Interval> &intervals) {
+            std::vector<std::reference_wrapper<EntryType>> result{};
+            for (const auto &interval : intervals)
+                for (auto entry{std::lower_bound(entries.begin(), entries.end(), interval.end)}; entry != entries.begin() && (--entry)->start < interval.end;)
+                    if (entry->end > interval.start && !IsGroupInEntries(entry->group, result))
+                        result.emplace_back(entry->group->value);
 
             return result;
         }

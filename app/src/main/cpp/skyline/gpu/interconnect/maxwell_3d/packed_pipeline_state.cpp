@@ -189,7 +189,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
             // FORMAT_CASE(R16_A16, R16A16Unorm);
             // FORMAT_CASE(RF16_AF16, R16A16Float);
             // FORMAT_CASE(RF32_AF32, R32A32Float);
-            // FORMAT_CASE(B8G8R8A8, A8R8G8B8Unorm)
+            // FORMAT_CASE(B8G8R8A8, B8G8R8A8Unorm);
             default:
                 throw exception("Unsupported colour rendertarget format: 0x{:X}", static_cast<u32>(format));
         }
@@ -285,7 +285,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
             (write.gEnable ? VK_COLOR_COMPONENT_G_BIT : 0) |
             (write.bEnable ? VK_COLOR_COMPONENT_B_BIT : 0) |
             (write.aEnable ? VK_COLOR_COMPONENT_A_BIT : 0);
-    };
+    }
 
     static u8 ConvertBlendOp(engine::BlendOp op) {
         auto conv{[&]() {

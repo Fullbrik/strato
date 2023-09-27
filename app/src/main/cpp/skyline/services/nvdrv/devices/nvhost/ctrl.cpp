@@ -263,7 +263,7 @@ namespace skyline::service::nvdrv::device::nvhost {
                         SyncpointAllocateEvent,   ARGS(In<u32>))
         IOCTL_CASE_ARGS(INOUT, SIZE(0x4),  MAGIC(CtrlMagic), FUNC(0x20),
                         SyncpointFreeEvent,       ARGS(In<u32>))
-        IOCTL_CASE_ARGS(INOUT, SIZE(0x8),  MAGIC(CtrlMagic), FUNC(0x21),
+        IOCTL_CASE_ARGS(IN, SIZE(0x8),  MAGIC(CtrlMagic), FUNC(0x21),
                         SyncpointFreeEventBatch,  ARGS(In<u64>))
 
         IOCTL_CASE_RESULT(INOUT, SIZE(0x183), MAGIC(CtrlMagic), FUNC(0x1B),

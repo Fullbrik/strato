@@ -148,6 +148,21 @@ namespace skyline::gpu::interconnect {
             return vk::BorderColor::eFloatTransparentBlack;
     }
 
+    vk::raii::Sampler *Samplers::GetDefaultSampler(InterconnectContext &ctx) {
+        if (defaultSampler)
+            return defaultSampler.get();
+
+        vk::SamplerCreateInfo samplerInfo{
+            vk::SamplerCreateInfo{
+                .unnormalizedCoordinates = false
+            }
+        };
+
+        defaultSampler = std::make_unique<vk::raii::Sampler>(ctx.gpu.vkDevice, samplerInfo);
+
+        return defaultSampler.get();
+    }
+
     vk::raii::Sampler *Samplers::GetSampler(InterconnectContext &ctx, u32 samplerIndex, u32 textureIndex) {
         const auto &samplerPoolObj{samplerPool.Get()};
         u32 index{samplerPoolObj.didUseTexHeaderBinding ? textureIndex : samplerIndex};
@@ -158,6 +173,9 @@ namespace skyline::gpu::interconnect {
         } else if (texSamplerCache[index]) {
             return texSamplerCache[index];
         }
+
+        //if (index > texSamplers.size()) [[unlikely]]
+        //    return GetDefaultSampler(ctx);
 
         TextureSamplerControl &texSampler{texSamplers[index]};
         auto &sampler{texSamplerStore[texSampler]};
@@ -215,5 +233,4 @@ namespace skyline::gpu::interconnect {
         texSamplerCache[index] = sampler.get();
         return sampler.get();
     }
-
 }

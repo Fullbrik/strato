@@ -241,3 +241,13 @@ extern "C" JNIEXPORT void JNICALL Java_org_stratoemu_strato_settings_NativeSetti
         return; // We don't mind if we miss settings updates while settings haven't been initialized
     settings->Update();
 }
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_org_stratoemu_strato_EmulationActivity_onTrim(JNIEnv *env, jobject thiz, jint level) {
+    auto gpu{GpuWeak.lock()};
+    if (!gpu)
+        return; // If the gpu isn't initialized there's nothing to trim
+
+    gpu->texture.OnTrim(level);
+}

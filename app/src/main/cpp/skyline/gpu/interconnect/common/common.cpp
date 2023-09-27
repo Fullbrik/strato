@@ -53,7 +53,11 @@ namespace skyline::gpu::interconnect {
     }
 
     void ConstantBuffer::Read(CommandExecutor &executor, span<u8> dstBuffer, size_t srcOffset) {
-        ContextLock lock{executor.tag, view};
-        view.Read(lock.IsFirstUsage(), FlushHostCallback, dstBuffer, srcOffset);
+        if (view) {
+            ContextLock lock{executor.tag, view};
+            view.Read(lock.IsFirstUsage(), FlushHostCallback, dstBuffer, srcOffset);
+        } else {
+            Logger::Error("Attempted to read stale constant buffer!");
+        }
     }
 }

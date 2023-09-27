@@ -24,6 +24,8 @@
 namespace skyline::gpu {
     static constexpr u32 VkApiVersion{VK_API_VERSION_1_1}; //!< The version of core Vulkan that we require
 
+    class TextureUsageTracker;
+
     /**
      * @brief An interface to host GPU structures, anything concerning host GPU/Presentation APIs is encapsulated by this
      */
@@ -31,8 +33,10 @@ namespace skyline::gpu {
       private:
         const DeviceState &state; // We access the device state inside Texture (and Buffers) for setting up NCE memory tracking
         friend Texture;
+        friend HostTexture;
         friend Buffer;
         friend BufferManager;
+        friend TextureUsageTracker;
 
       public:
         adrenotools_gpu_mapping adrenotoolsImportMapping{}; //!< Persistent struct to store active adrenotools mapping import info
@@ -50,6 +54,7 @@ namespace skyline::gpu {
         CommandScheduler scheduler;
         PresentationEngine presentation;
 
+        TextureUsageTracker textureUsageTracker;
         TextureManager texture;
         BufferManager buffer;
         MegaBufferAllocator megaBufferAllocator;

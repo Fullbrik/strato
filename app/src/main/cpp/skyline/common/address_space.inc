@@ -43,7 +43,7 @@ namespace skyline {
                         return blockEndPredecessor->phys + virtEnd - blockEndPredecessor->virt;
                 }()};
 
-                if (blockEndPredecessor->virt >= virt) {
+                if (blockEndPredecessor != blocks.begin() && blockEndPredecessor->virt >= virt) {
                     // If this block's start would be overlapped by the map then reuse it as a tail block
                     blockEndPredecessor->virt = virtEnd;
                     blockEndPredecessor->phys = tailPhys;
@@ -142,7 +142,7 @@ namespace skyline {
             }()};
 
             // We can't have two unmapped regions after each other
-            if (eraseEnd != blocks.end() && (eraseEnd == blockStartSuccessor || (blockStartPredecessor->Unmapped() && eraseEnd->Unmapped())))
+            if (eraseEnd != blocks.end() && (eraseEnd == blockStartSuccessor || (blockStartPredecessor->Unmapped() && eraseEnd->Unmapped()))) [[unlikely]]
                 throw exception("Multiple contiguous unmapped regions are unsupported!");
 
             blocks.erase(blockStartSuccessor, eraseEnd);
@@ -267,7 +267,7 @@ namespace skyline {
 
     MM_MEMBER()::FlatMemoryManager() {
         sparseMap = static_cast<u8 *>(mmap(0, SparseMapSize, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0));
-        if (!sparseMap)
+        if (!sparseMap) [[unlikely]]
             throw exception("Failed to mmap sparse map!");
     }
 
@@ -291,8 +291,8 @@ namespace skyline {
 
         // Reads may span across multiple individual blocks
         while (size) {
-            if (predecessor->phys == nullptr) {
-                throw exception("Page fault at 0x{:X}", predecessor->virt);
+            if (predecessor->phys == nullptr) [[unlikely]] {
+                Logger::Warn("Page fault at 0x{:X}", predecessor->virt);
             } else {
                 if (predecessor->extraInfo.sparseMapped) { // Sparse mappings read all zeroes
                     std::memset(destination, 0, blockReadSize);
@@ -333,8 +333,8 @@ namespace skyline {
 
         // Writes may span across multiple individual blocks
         while (size) {
-            if (predecessor->phys == nullptr) {
-                throw exception("Page fault at 0x{:X}", predecessor->virt);
+            if (predecessor->phys == nullptr) [[unlikely]] {
+                Logger::Warn("Page fault at 0x{:X}", predecessor->virt);
             } else {
                 if (!predecessor->extraInfo.sparseMapped) { // Sparse mappings ignore writes
                     if (cpuAccessCallback)
@@ -384,11 +384,11 @@ namespace skyline {
 
         // Writes may span across multiple individual blocks
         while (size) {
-            if (srcPredecessor->phys == nullptr) {
-                throw exception("Page fault at 0x{:X}", srcPredecessor->virt);
-            } else if (dstPredecessor->phys == nullptr) {
-                throw exception("Page fault at 0x{:X}", dstPredecessor->virt);
-            } else { [[likely]]
+            if (srcPredecessor->phys == nullptr) [[unlikely]] {
+                Logger::Warn("Page fault at 0x{:X}", srcPredecessor->virt);
+            } else if (dstPredecessor->phys == nullptr) [[unlikely]] {
+                Logger::Warn("Page fault at 0x{:X}", dstPredecessor->virt);
+            } else [[likely]] {
                     if (srcPredecessor->extraInfo.sparseMapped) {
                         std::memset(dstBlockPhys, 0, blockCopySize);
                     } else [[likely]] {

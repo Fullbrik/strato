@@ -7,16 +7,20 @@
 #include <common.h>
 #include <soc/gm20b/engines/engine.h>
 
+/**
+ * This file contains fermi2d types that are used by both interconnect and soc
+ */
+
 namespace skyline::soc::gm20b::engine::fermi2d::type {
     #pragma pack(push, 1)
 
-    enum class MemoryLayout {
+    enum class MemoryLayout : u32 {
         BlockLinear = 0,
         Pitch = 1
     };
 
     struct Surface {
-        enum class SurfaceFormat {
+        enum class SurfaceFormat : u8 {
             Y1_8X8 = 0x1C,
             AY8 = 0x1D,
             R32G32B32A32Float = 0xC0,
@@ -59,31 +63,29 @@ namespace skyline::soc::gm20b::engine::fermi2d::type {
             O8R8G8B8 = 0xFE,
             Y32 = 0xFF
         } format;
+        u32 _pad_ : 24;
 
-        MemoryLayout memoryLayout;
+        MemoryLayout memoryLayout : 1;
+        u32 _pad2_ : 31;
 
         struct {
-            u8 widthLog2 : 4;
+            u8 _pad_ : 4;
             u8 heightLog2 : 4;
             u8 depthLog2 : 4;
-            u32 _pad_ : 20;
+            u32 _pad2_ : 20;
 
-            u8 Width() const {
-                return static_cast<u8>(1 << widthLog2);
-            }
-
-            u8 Height() const {
+            constexpr u8 Height() const {
                 return static_cast<u8>(1 << heightLog2);
             }
 
-            u8 Depth() const {
+            constexpr u8 Depth() const {
                 return static_cast<u8>(1 << depthLog2);
             }
         } blockSize;
 
         u32 depth;
-        u32 layer;
-        u32 stride;
+        u32 layer; // src has invalidateTextureDataCache instead of this
+        u32 pitch;
         u32 width;
         u32 height;
         Address address;

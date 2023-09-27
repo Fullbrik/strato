@@ -12,6 +12,7 @@ namespace skyline::gpu::interconnect {
 
     /**
      * @brief The Texture Image Control is a descriptor used to configure the texture unit in Maxwell GPUs
+     * @url https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/3d/clb197tex.h
      * @url https://github.com/envytools/envytools/blob/master/rnndb/graph/gm200_texture.xml
      * @url https://github.com/devkitPro/deko3d/blob/00c12d1f4809014f1cc22719dd2e3476735eec64/source/maxwell/texture_image_control_block.h
      * @note Any members with underscore number suffixes represent a bitfield range of a value that member represents
@@ -21,32 +22,32 @@ namespace skyline::gpu::interconnect {
         /**
          * @note An underscore may be used to describe a different block in a format
          */
-        enum class ImageFormat : u32 {
-            Invalid = 0x0,
+        enum class ImageFormat : u8 {
+            Invalid = 0x00,
             R32G32B32A32 = 0x01,
             R32G32B32 = 0x02,
             R16G16B16A16 = 0x03,
             R32G32 = 0x04,
             R32B24G8 = 0x05,
-            Etc2Rgb = 0x06,
+            Etc2RGB = 0x06,
             X8B8G8R8 = 0x07,
             A8B8G8R8 = 0x08,
             A2B10G10R10 = 0x09,
-            Etc2RgbPta = 0x0A,
-            Etc2Rgba = 0x0B,
+            Etc2RGBPta = 0x0A,
+            Etc2RGBA = 0x0B,
             R16G16 = 0x0C,
-            R24G8 = 0x0D,
-            R8G24 = 0x0E,
+            G8R24 = 0x0D,
+            G24R8 = 0x0E,
             R32 = 0x0F,
             Bc6HSfloat = 0x10,
             Bc6HUfloat = 0x11,
-            R4G4B4A4 = 0x12,
+            A4B4G4R4 = 0x12,
             A5B5G5R1 = 0x13,
             A1B5G5R5 = 0x14,
             B5G6R5 = 0x15,
             B6G5R5 = 0x16,
-            BC7 = 0x17,
-            R8G8 = 0x18,
+            Bc7 = 0x17,
+            G8R8 = 0x18,
             Eac = 0x19,
             EacX2 = 0x1A,
             R16 = 0x1B,
@@ -58,19 +59,19 @@ namespace skyline::gpu::interconnect {
             B10G11R11 = 0x21,
             G8B8G8R8 = 0x22,
             B8G8R8G8 = 0x23,
-            BC1 = 0x24,
-            BC2 = 0x25,
-            BC3 = 0x26,
-            BC4 = 0x27,
-            BC5 = 0x28,
-            S8D24 = 0x29,
+            Bc1 = 0x24,
+            Bc2 = 0x25,
+            Bc3 = 0x26,
+            Bc4 = 0x27,
+            Bc5 = 0x28,
+            D24S8 = 0x29,
             X8D24 = 0x2A,
-            D24S8 = 0x2B,
+            S8D24 = 0x2B,
             X4V4D24_Cov4R4V = 0x2C,
             X4V4D24_Cov8R8V = 0x2D,
             V8D24_Cov4R12V = 0x2E,
             D32 = 0x2F,
-            D32S8 = 0x30,
+            D32X24S8 = 0x30,
             X8D24_X20V4S8_Cov4R4V = 0x31,
             X8D24_X20V4S8_Cov8R8V = 0x32,
             D32_X20V4X8_Cov4R4V = 0x33,
@@ -101,7 +102,7 @@ namespace skyline::gpu::interconnect {
             Astc10x6 = 0x57,
         };
 
-        enum class ImageComponent : u32 {
+        enum class ImageComponent : u8 {
             Snorm = 1,
             Unorm = 2,
             Sint = 3,
@@ -111,7 +112,7 @@ namespace skyline::gpu::interconnect {
             Float = 7,
         };
 
-        enum class ImageSwizzle : u32 {
+        enum class ImageSwizzle : u8 {
             Zero = 0,
             R = 2,
             G = 3,
@@ -121,7 +122,7 @@ namespace skyline::gpu::interconnect {
             OneFloat = 7,
         };
 
-        enum class HeaderType : u32 {
+        enum class HeaderType : u8 {
             Buffer1D = 0,
             PitchColorKey = 1,
             Pitch = 2,
@@ -129,7 +130,7 @@ namespace skyline::gpu::interconnect {
             BlockLinearColorKey = 4,
         };
 
-        enum class TextureType : u32 {
+        enum class TextureType : u8 {
             e1D = 0,
             e2D = 1,
             e3D = 2,
@@ -141,7 +142,7 @@ namespace skyline::gpu::interconnect {
             eCubeArray = 8,
         };
 
-        enum class MsaaMode : u32 {
+        enum class MsaaMode : u8 {
             e1x1 = 0,
             e2x1 = 1,
             e2x2 = 2,
@@ -155,19 +156,19 @@ namespace skyline::gpu::interconnect {
             e4x2Vc24 = 11,
         };
 
-        enum class LodQuality : u32 {
+        enum class LodQuality : u8 {
             Low = 0,
             High = 1,
         };
 
-        enum class SectorPromotion : u32 {
+        enum class SectorPromotion : u8 {
             None = 0,
             To2V = 1,
             To2H = 2,
             To4 = 3,
         };
 
-        enum class BorderSize : u32 {
+        enum class BorderSize : u8 {
             One = 0,
             Two = 1,
             Four = 2,
@@ -175,21 +176,21 @@ namespace skyline::gpu::interconnect {
             SamplerColor = 7,
         };
 
-        enum class AnisotropySpreadModifier : u32 {
+        enum class AnisotropySpreadModifier : u8 {
             None = 0,
             One = 1,
             Two = 2,
             Sqrt = 3,
         };
 
-        enum class AnisotropySpread : u32 {
+        enum class AnisotropySpread : u8 {
             Half = 0,
             One = 1,
             Two = 2,
             Max = 3,
         };
 
-        enum class MaxAnisotropy : u32 {
+        enum class MaxAnisotropy : u8 {
             e1to1 = 0,
             e2to1 = 1,
             e4to1 = 2,
@@ -213,13 +214,13 @@ namespace skyline::gpu::interconnect {
             ImageSwizzle swizzleY : 3;
             ImageSwizzle swizzleZ : 3;
             ImageSwizzle swizzleW : 3;
-            u32 _pad_ : 1;
+            bool packComponents : 1;
 
-            bool operator==(const FormatWord &) const = default;
+            constexpr bool operator==(const FormatWord &) const = default;
 
             constexpr u32 Raw() const {
                 if (std::is_constant_evaluated()) {
-                    u32 raw{_pad_};
+                    u32 raw{packComponents};
                     raw <<= 3;
                     raw |= static_cast<u32>(swizzleW);
                     raw <<= 3;
@@ -246,96 +247,108 @@ namespace skyline::gpu::interconnect {
         } formatWord;
 
         // 0x04
-        u32 addressLow;
+        union Address {
+            //!< Pitch specific
+            struct {
+                u8 reserved1A : 5;
+                u32 address31To5 : 27;
+            };
+            //!< Blocklinear specific
+            struct {
+                u8 reserved1Y : 5;
+                u8 gobDepthOffset : 2; //!< The offset of the texture in slices
+                u8 reserved1X : 2;
+                u32 address31To9 : 23;
+            };
+
+            u32 raw;
+
+            constexpr bool operator==(const Address &other) const {
+                return raw == other.raw;
+            };
+        } lowAddress;
 
         // 0x08
-        u32 addressHigh : 16;
-        u32 viewLayerBase_3_7 : 5;
-        HeaderType headerType : 3;
-        u32 loadStoreHint : 1;
-        u32 viewCoherencyHash : 4;
-        u32 viewLayerBase_8_10 : 3;
+        u16 address47To32;
+        u8 addressReserved : 5;
+        TextureImageControl::HeaderType headerType : 3;
+        u8 reservedHeaderVersion : 1;
+        u8 resourceViewCoherencyHash : 4;
+        u8 reserved2A : 3;
 
         // 0x0C
         union TileConfig {
-            u16 widthMinusOne_16_31;
-
-            constexpr static size_t PitchAlignmentBits{5}; //!< The amount of bits that are 0 in the pitch due to alignment (Aligned to 32 bytes)
-            u16 pitchHigh; //!< Upper 16-bits of the 21-bit pitch, lower bits are implicitly zero due to alignment
+            //!< Pitch specific
+            u16 pitch20To5;
+            //!< Blocklinear specific
             struct {
-                u16 tileWidthGobsLog2 : 3;
-                u16 tileHeightGobsLog2 : 3;
-                u16 tileDepthGobsLog2 : 3;
-                u16 _pad0_ : 1;
-                u16 sparseTileWidthGobsLog2 : 3;
-                u16 gob3d : 1;
-                u16 _pad1_ : 2;
+                u8 gobsPerBlockWidthLog2 : 3;
+                u8 gobsPerBlockHeightLog2 : 3;
+                u8 gobsPerBlockDepthLog2 : 3;
+                u8 reserved3Y : 1;
+                u8 tileWidthInGobsLog2 : 3;
+                bool gob3D : 1;
+                u8 reserved3Z : 2;
             };
+
             u16 raw;
 
-            bool operator==(const TileConfig &other) const {
+            constexpr bool operator==(const TileConfig &other) const {
                 return raw == other.raw;
-            }
+            };
         } tileConfig;
-        u16 lodAnisotropyQuality_2 : 1;
-        LodQuality lodAnisotropyQuality : 1;
-        LodQuality lodIsotropyQuality : 1;
-        AnisotropySpreadModifier anisotropyCoarseSpreadModifier : 2;
-        u16 anisotropySpreadScale : 5;
-        u16 useHeaderOptControl : 1;
-        u16 depthTexture : 1;
-        u16 mipMaxLevels : 4;
+        bool lodAnisoQuality2 : 1;
+        TextureImageControl::LodQuality lodAnisoQualityLod : 1;
+        TextureImageControl::LodQuality lodIsoQualityLod : 1;
+        TextureImageControl::AnisotropySpreadModifier anisotropyCoarseSpreadModifier : 2;
+        u8 anisoSpreadScale : 5;
+        bool useHeaderOptControl : 1;
+        bool depthTexture : 1;
+        u8 maxMipLevel : 4;
 
         // 0x10
-        u32 widthMinusOne : 16;
-        u32 viewLayerBase_0_2 : 3;
-        u32 anisotropySpreadMaxLog2 : 3;
-        u32 isSrgb : 1;
-        TextureType textureType : 4;
-        SectorPromotion sectorPromotion : 2;
-        BorderSize borderSize : 3;
+        u16 widthMinusOne;
+        u8 reserved4A : 3;
+        u8 anisotropySpreadMaxLog2 : 3;
+        bool srgbConversion : 1;
+        TextureImageControl::TextureType textureType : 4;
+        TextureImageControl::SectorPromotion sectorPromotion : 2;
+        TextureImageControl::BorderSize borderSize : 3;
 
         // 0x14
-        u32 heightMinusOne : 16;
-        u32 depthMinusOne : 14;
-        u32 isSparse : 1;
-        u32 normalizedCoordinates : 1;
+        u16 heightMinusOne;
+        u16 depthMinusOne : 14;
+        u8 reserved5A : 1;
+        bool normalizedCordinates : 1;
 
         // 0x18
-        u32 colorKeyOp : 1;
-        u32 trilinOpt : 5;
-        u32 mipLodBias : 13;
-        u32 anisoBias : 4;
-        AnisotropySpread anisotropyFineSpread : 2;
-        AnisotropySpread anisotropyCoarseSpread : 2;
+        u8 reserved6Y : 1;
+        u8 trilinearOpt : 5;
+        u16 mipLodBias : 13;
+        u8 anisotropyBias : 4;
+        AnisotropySpread anisotropyFineSpreadFunc : 2;
+        AnisotropySpread anisotropyCoarseSpreadFunc : 2;
         MaxAnisotropy maxAnisotropy : 3;
         AnisotropySpreadModifier anisotropyFineSpreadModifier : 2;
 
         // 0x1C
-        union ViewConfig {
-            u32 colorKeyValue;
-            struct {
-                u32 mipMinLevel : 4;
-                u32 mipMaxLevel : 4;
-                MsaaMode msaaMode : 4;
-                u32 minLodClamp : 12;
-                u32 _pad2_ : 8;
-            };
-            u32 raw;
+        u8 viewMinMipLevel : 4;
+        u8 viewMaxMipLevel : 4;
+        MsaaMode msaaMode : 4;
+        u16 minLodClamp : 12;
+        u8 reserved7Y;
 
-            bool operator==(const ViewConfig &other) const {
-                return raw == other.raw;
+        constexpr bool operator==(const TextureImageControl &) const = default;
+
+        constexpr u64 Iova() const {
+            switch (headerType) {
+                case TextureImageControl::HeaderType::Pitch:
+                    return (static_cast<u64>(address47To32) << 32) | (static_cast<u64>(lowAddress.address31To5) << 5);
+                case TextureImageControl::HeaderType::BlockLinear:
+                    return (static_cast<u64>(address47To32) << 32) | (static_cast<u64>(lowAddress.address31To9) << 9);
+                default:
+                    return 0UL;
             }
-        } viewConfig;
-
-        bool operator==(const TextureImageControl &) const = default;
-
-        u64 Iova() const {
-            return (static_cast<u64>(addressHigh) << 32) | addressLow;
-        }
-
-        u32 BaseLayer() const {
-            return static_cast<u32>(viewLayerBase_0_2 | (viewLayerBase_3_7 << 3) | (viewLayerBase_8_10 << 8));
         }
     };
     static_assert(sizeof(TextureImageControl) == 0x20);

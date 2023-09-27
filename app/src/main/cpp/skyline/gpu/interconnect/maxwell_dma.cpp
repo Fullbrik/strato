@@ -32,9 +32,10 @@ namespace skyline::gpu::interconnect {
             srcBuf.GetBuffer()->BlockAllCpuBackingWrites();
             dstBuf.GetBuffer()->BlockAllCpuBackingWrites();
 
+            // Holy shit this is inefficient
             executor.AddOutsideRpCommand([srcBuf, dstBuf](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu) {
                 commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer, {}, vk::MemoryBarrier{
-                    .srcAccessMask = vk::AccessFlagBits::eMemoryRead,
+                    .srcAccessMask = vk::AccessFlagBits::eMemoryWrite,
                     .dstAccessMask = vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite
                 }, {}, {});
                 auto srcBufBinding{srcBuf.GetBinding(gpu)};
@@ -67,8 +68,8 @@ namespace skyline::gpu::interconnect {
 
         executor.AddOutsideRpCommand([clearBuf, value](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu) {
             commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer, {}, vk::MemoryBarrier{
-                .srcAccessMask = vk::AccessFlagBits::eMemoryRead,
-                .dstAccessMask = vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite
+                .srcAccessMask = vk::AccessFlagBits::eMemoryWrite,
+                .dstAccessMask = vk::AccessFlagBits::eTransferWrite
             }, {}, {});
 
             auto clearBufBinding{clearBuf.GetBinding(gpu)};

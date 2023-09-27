@@ -291,12 +291,12 @@ namespace skyline::gpu::interconnect::maxwell3d {
             auto pushBindings{[&](vk::DescriptorType type, const auto &descs, u16 &count, auto &outputDescs, auto &&descCb, bool individualDescWrites = false) {
                 descriptorInfo.totalWriteDescCount += individualDescWrites ? descs.size() : ((descs.size() > 0) ? 1 : 0);
 
-                for (u16 descIdx{}; descIdx < descs.size(); descIdx++) {
+                for (size_t descIdx{}; descIdx < descs.size(); descIdx++) {
                     const auto &desc{descs[descIdx]};
                     outputDescs.emplace_back(desc);
                     count += desc.count;
 
-                    descCb(desc, descIdx);
+                    descCb(desc, static_cast<u16>(descIdx));
 
                     descriptorInfo.copyDescs.push_back(vk::CopyDescriptorSet{
                         .srcBinding = bindingIndex,
@@ -339,12 +339,12 @@ namespace skyline::gpu::interconnect::maxwell3d {
             pushBindings(vk::DescriptorType::eUniformTexelBuffer, stage.info.texture_buffer_descriptors,
                          stageDescInfo.uniformTexelBufferDescTotalCount, stageDescInfo.uniformTexelBufferDescs,
                          [](const auto &, u32) {
-                LOGW("Texture buffer descriptors are not supported");
+                LOGW("Texture buffer descriptors are unimplemented");
             });
             pushBindings(vk::DescriptorType::eStorageTexelBuffer, stage.info.image_buffer_descriptors,
                          stageDescInfo.storageTexelBufferDescTotalCount, stageDescInfo.storageTexelBufferDescs,
                          [](const auto &, u32) {
-                LOGW("Image buffer descriptors are not supported");
+                LOGW("Image buffer descriptors are unimplemented");
             });
             descriptorInfo.totalTexelBufferDescCount += stageDescInfo.uniformTexelBufferDescTotalCount + stageDescInfo.storageTexelBufferDescTotalCount;
 
@@ -366,9 +366,14 @@ namespace skyline::gpu::interconnect::maxwell3d {
             }, needsIndividualTextureBindingWrites);
             pushBindings(vk::DescriptorType::eStorageImage, stage.info.image_descriptors,
                          stageDescInfo.storageImageDescTotalCount, stageDescInfo.storageImageDescs,
-                         [](const auto &, u16) {
-                LOGW("Image descriptors are not supported");
-            });
+                         [&](const auto &desc, u16 descIdx) {
+                auto &usage{stageDescInfo.cbufUsages[desc.cbuf_index]};
+                usage.storageImages.push_back({bindingIndex, descIdx, descriptorInfo.totalStorageImageCount});
+                usage.totalImageDescCount += desc.count;
+                usage.writeDescCount++;
+
+                descriptorInfo.totalStorageImageCount += desc.count;
+            }, needsIndividualTextureBindingWrites);
             descriptorInfo.totalImageDescCount += stageDescInfo.combinedImageSamplerDescTotalCount + stageDescInfo.storageImageDescTotalCount;
         }
         return descriptorInfo;
@@ -377,25 +382,25 @@ namespace skyline::gpu::interconnect::maxwell3d {
     static vk::Format ConvertVertexInputAttributeFormat(engine::VertexAttribute::ComponentBitWidths componentBitWidths, engine::VertexAttribute::NumericalType numericalType) {
         #define FORMAT_CASE(bitWidths, type, vkType, vkFormat, ...) \
             case engine::VertexAttribute::ComponentBitWidths::bitWidths | engine::VertexAttribute::NumericalType::type: \
-                return vk::Format::vkFormat ## vkType ##__VA_ARGS__
+                return vk::Format::vkFormat ## vkType ##__VA_ARGS__;
 
         #define FORMAT_INT_CASE(size, vkFormat, ...) \
-            FORMAT_CASE(size, Uint, Uint, vkFormat, ##__VA_ARGS__); \
-            FORMAT_CASE(size, Sint, Sint, vkFormat, ##__VA_ARGS__);
+            FORMAT_CASE(size, Uint, Uint, vkFormat, ##__VA_ARGS__) \
+            FORMAT_CASE(size, Sint, Sint, vkFormat, ##__VA_ARGS__)
 
         #define FORMAT_INT_FLOAT_CASE(size, vkFormat, ...) \
-            FORMAT_INT_CASE(size, vkFormat, ##__VA_ARGS__); \
-            FORMAT_CASE(size, Float, Sfloat, vkFormat, ##__VA_ARGS__);
+            FORMAT_INT_CASE(size, vkFormat, ##__VA_ARGS__) \
+            FORMAT_CASE(size, Float, Sfloat, vkFormat, ##__VA_ARGS__)
 
         #define FORMAT_NORM_INT_SCALED_CASE(size, vkFormat, ...) \
-            FORMAT_INT_CASE(size, vkFormat, ##__VA_ARGS__);               \
-            FORMAT_CASE(size, Unorm, Unorm, vkFormat, ##__VA_ARGS__);     \
-            FORMAT_CASE(size, Snorm, Snorm, vkFormat, ##__VA_ARGS__);     \
-            FORMAT_CASE(size, Uscaled, Uscaled, vkFormat, ##__VA_ARGS__); \
+            FORMAT_INT_CASE(size, vkFormat, ##__VA_ARGS__)               \
+            FORMAT_CASE(size, Unorm, Unorm, vkFormat, ##__VA_ARGS__)    \
+            FORMAT_CASE(size, Snorm, Snorm, vkFormat, ##__VA_ARGS__)     \
+            FORMAT_CASE(size, Uscaled, Uscaled, vkFormat, ##__VA_ARGS__) \
             FORMAT_CASE(size, Sscaled, Sscaled, vkFormat, ##__VA_ARGS__)
 
         #define FORMAT_NORM_INT_SCALED_FLOAT_CASE(size, vkFormat) \
-            FORMAT_NORM_INT_SCALED_CASE(size, vkFormat); \
+            FORMAT_NORM_INT_SCALED_CASE(size, vkFormat) \
             FORMAT_CASE(size, Float, Sfloat, vkFormat)
 
         // No mobile support scaled formats, so pass as int and the shader compiler will convert to float for us
@@ -406,31 +411,31 @@ namespace skyline::gpu::interconnect::maxwell3d {
 
         switch (componentBitWidths | numericalType) {
             /* 8-bit components */
-            FORMAT_NORM_INT_SCALED_CASE(R8, eR8);
-            FORMAT_NORM_INT_SCALED_CASE(R8_G8, eR8G8);
-            FORMAT_NORM_INT_SCALED_CASE(G8R8, eR8G8);
-            FORMAT_NORM_INT_SCALED_CASE(R8_G8_B8, eR8G8B8);
-            FORMAT_NORM_INT_SCALED_CASE(R8_G8_B8_A8, eR8G8B8A8);
-            FORMAT_NORM_INT_SCALED_CASE(A8B8G8R8, eR8G8B8A8);
-            FORMAT_NORM_INT_SCALED_CASE(X8B8G8R8, eR8G8B8A8);
+            FORMAT_NORM_INT_SCALED_CASE(R8, eR8)
+            FORMAT_NORM_INT_SCALED_CASE(R8_G8, eR8G8)
+            FORMAT_NORM_INT_SCALED_CASE(G8R8, eR8G8)
+            FORMAT_NORM_INT_SCALED_CASE(R8_G8_B8, eR8G8B8)
+            FORMAT_NORM_INT_SCALED_CASE(R8_G8_B8_A8, eR8G8B8A8)
+            FORMAT_NORM_INT_SCALED_CASE(A8B8G8R8, eR8G8B8A8)
+            FORMAT_NORM_INT_SCALED_CASE(X8B8G8R8, eR8G8B8A8)
 
                 /* 16-bit components */
-            FORMAT_NORM_INT_SCALED_FLOAT_CASE(R16, eR16);
-            FORMAT_NORM_INT_SCALED_FLOAT_CASE(R16_G16, eR16G16);
-            FORMAT_NORM_INT_SCALED_FLOAT_CASE(R16_G16_B16, eR16G16B16);
-            FORMAT_NORM_INT_SCALED_FLOAT_CASE(R16_G16_B16_A16, eR16G16B16A16);
+            FORMAT_NORM_INT_SCALED_FLOAT_CASE(R16, eR16)
+            FORMAT_NORM_INT_SCALED_FLOAT_CASE(R16_G16, eR16G16)
+            FORMAT_NORM_INT_SCALED_FLOAT_CASE(R16_G16_B16, eR16G16B16)
+            FORMAT_NORM_INT_SCALED_FLOAT_CASE(R16_G16_B16_A16, eR16G16B16A16)
 
                 /* 32-bit components */
-            FORMAT_INT_FLOAT_CASE(R32, eR32);
-            FORMAT_INT_FLOAT_CASE(R32_G32, eR32G32);
-            FORMAT_INT_FLOAT_CASE(R32_G32_B32, eR32G32B32);
-            FORMAT_INT_FLOAT_CASE(R32_G32_B32_A32, eR32G32B32A32);
+            FORMAT_INT_FLOAT_CASE(R32, eR32)
+            FORMAT_INT_FLOAT_CASE(R32_G32, eR32G32)
+            FORMAT_INT_FLOAT_CASE(R32_G32_B32, eR32G32B32)
+            FORMAT_INT_FLOAT_CASE(R32_G32_B32_A32, eR32G32B32A32)
 
                 /* 10-bit RGB, 2-bit A */
-            FORMAT_NORM_INT_SCALED_CASE(A2B10G10R10, eA2B10G10R10, Pack32);
+            FORMAT_NORM_INT_SCALED_CASE(A2B10G10R10, eA2B10G10R10, Pack32)
 
                 /* 11-bit G and R, 10-bit B */
-            FORMAT_CASE(B10G11R11, Float, Ufloat, eB10G11R11, Pack32);
+            FORMAT_CASE(B10G11R11, Float, Ufloat, eB10G11R11, Pack32)
 
             default:
                 LOGW("Unimplemented Maxwell3D Vertex Buffer Format: {} | {}", static_cast<u8>(componentBitWidths), static_cast<u8>(numericalType));
@@ -505,23 +510,21 @@ namespace skyline::gpu::interconnect::maxwell3d {
         for (u32 i{}; i < engine::VertexStreamCount; i++) {
             const auto &binding{packedState.vertexBindings[i]};
             bindingDescs.push_back({
-                                       .binding = i,
-                                       .stride = packedState.vertexStrides[i],
-                                       .inputRate = binding.GetInputRate(),
-                                   });
+                .binding = i,
+                .stride = packedState.vertexStrides[i],
+                .inputRate = binding.GetInputRate(),
+            });
 
             if (binding.GetInputRate() == vk::VertexInputRate::eInstance) {
-                if (!gpu.traits.supportsVertexAttributeDivisor)
-                    [[unlikely]]
-                        LOGW("Vertex attribute divisor used on guest without host support");
-                else if (!gpu.traits.supportsVertexAttributeZeroDivisor && binding.divisor == 0)
-                    [[unlikely]]
-                        LOGW("Vertex attribute zero divisor used on guest without host support");
+                if (!gpu.traits.supportsVertexAttributeDivisor) [[unlikely]]
+                    LOGW("Vertex attribute divisor used on guest without host support");
+                else if (!gpu.traits.supportsVertexAttributeZeroDivisor && binding.divisor == 0) [[unlikely]]
+                    LOGW("Vertex attribute zero divisor used on guest without host support");
                 else
                     bindingDivisorDescs.push_back({
-                                                      .binding = i,
-                                                      .divisor = binding.divisor,
-                                                  });
+                        .binding = i,
+                        .divisor = binding.divisor,
+                    });
             }
         }
 
@@ -529,11 +532,11 @@ namespace skyline::gpu::interconnect::maxwell3d {
             const auto &attribute{packedState.vertexAttributes[i]};
             if (attribute.source == engine::VertexAttribute::Source::Active && shaderStages[0].info.loads.Generic(i))
                 attributeDescs.push_back({
-                                             .location = i,
-                                             .binding = attribute.stream,
-                                             .format = ConvertVertexInputAttributeFormat(attribute.componentBitWidths, attribute.numericalType),
-                                             .offset = attribute.offset,
-                                         });
+                    .location = i,
+                    .binding = attribute.stream,
+                    .format = ConvertVertexInputAttributeFormat(attribute.componentBitWidths, attribute.numericalType),
+                    .offset = attribute.offset,
+                });
         }
 
         vk::StructureChain<vk::PipelineVertexInputStateCreateInfo, vk::PipelineVertexInputDivisorStateCreateInfoEXT> vertexInputState{
@@ -569,22 +572,24 @@ namespace skyline::gpu::interconnect::maxwell3d {
         rasterizationCreateInfo.cullMode = vk::CullModeFlags{packedState.cullMode};
         rasterizationCreateInfo.frontFace = packedState.frontFaceClockwise ? vk::FrontFace::eClockwise : vk::FrontFace::eCounterClockwise;
         rasterizationCreateInfo.depthBiasEnable = packedState.depthBiasEnable;
-        rasterizationCreateInfo.depthClampEnable = packedState.depthClampEnable;
-        if (!gpu.traits.supportsDepthClamp)
+        rasterizationCreateInfo.depthClampEnable = packedState.depthClampEnable && gpu.traits.supportsDepthClamp;
+        if (packedState.depthClampEnable && !gpu.traits.supportsDepthClamp) [[unlikely]]
             LOGW("Depth clamp used on guest without host support");
         rasterizationState.get<vk::PipelineRasterizationProvokingVertexStateCreateInfoEXT>().provokingVertexMode = ConvertProvokingVertex(packedState.provokingVertex);
 
         constexpr vk::PipelineMultisampleStateCreateInfo multisampleState{
-            .rasterizationSamples = vk::SampleCountFlagBits::e1,
+            .rasterizationSamples = vk::SampleCountFlagBits::e1
         };
 
         vk::PipelineDepthStencilStateCreateInfo depthStencilState{
             .depthTestEnable = packedState.depthTestEnable,
             .depthWriteEnable = packedState.depthWriteEnable,
             .depthCompareOp = packedState.GetDepthFunc(),
-            .depthBoundsTestEnable = packedState.depthBoundsTestEnable,
-            .stencilTestEnable = packedState.stencilTestEnable
+            .depthBoundsTestEnable = packedState.depthBoundsTestEnable && gpu.traits.supportsDepthBounds,
+            .stencilTestEnable = packedState.stencilTestEnable,
         };
+        if (packedState.depthBoundsTestEnable && !gpu.traits.supportsDepthBounds) [[unlikely]]
+            Logger::Warn("Depth bounds used on guest without host support");
 
         std::tie(depthStencilState.front, depthStencilState.back) = packedState.GetStencilOpsState();
 
@@ -601,8 +606,11 @@ namespace skyline::gpu::interconnect::maxwell3d {
             }
         }
 
+        if (packedState.logicOpEnable && !gpu.traits.supportsLogicOp) [[unlikely]]
+            Logger::Warn("LogicOp used on guest without host support");
+
         vk::PipelineColorBlendStateCreateInfo colorBlendState{
-            .logicOpEnable = packedState.logicOpEnable,
+            .logicOpEnable = packedState.logicOpEnable && gpu.traits.supportsLogicOp,
             .logicOp = packedState.GetLogicOp(),
             .attachmentCount = static_cast<u32>(attachmentBlendStates.size()),
             .pAttachments = attachmentBlendStates.data()
@@ -728,10 +736,10 @@ namespace skyline::gpu::interconnect::maxwell3d {
     }
 
     u32 Pipeline::GetTotalSampledImageCount() const {
-        return descriptorInfo.totalCombinedImageSamplerCount;
+        return descriptorInfo.totalImageDescCount;
     }
 
-    DescriptorUpdateInfo *Pipeline::SyncDescriptors(InterconnectContext &ctx, ConstantBufferSet &constantBuffers, Samplers &samplers, Textures &textures, span<TextureView *> sampledImages, vk::PipelineStageFlags &srcStageMask, vk::PipelineStageFlags &dstStageMask) {
+    DescriptorUpdateInfo *Pipeline::SyncDescriptors(InterconnectContext &ctx, ConstantBufferSet &constantBuffers, Samplers &samplers, Textures &textures, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, vk::PipelineStageFlags &srcStageMask, vk::PipelineStageFlags &dstStageMask) {
         SyncCachedStorageBufferViews(ctx.executor.executionTag);
 
         u32 writeIdx{};
@@ -744,7 +752,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
         auto imageDescs{ctx.executor.allocator->AllocateUntracked<vk::DescriptorImageInfo>(descriptorInfo.totalImageDescCount)};
 
         u32 storageBufferIdx{}; // Need to keep track of this to index into the cached view array
-        u32 combinedImageSamplerIdx{}; // Need to keep track of this to index into the sampled image array
+        u32 imageDescIdx{}; // Need to keep track of this to index into the image array
         u32 bindingIdx{};
 
         /**
@@ -827,15 +835,28 @@ namespace skyline::gpu::interconnect::maxwell3d {
             writeImageDescs(vk::DescriptorType::eCombinedImageSampler, stage.combinedImageSamplerDescs, stage.combinedImageSamplerDescTotalCount,
                             [&](const DescriptorInfo::StageDescriptorInfo::CombinedImageSamplerDesc &desc, size_t arrayIdx) {
                                 BindlessHandle handle{ReadBindlessHandle(ctx, constantBuffers[i], desc, arrayIdx)};
-                                auto binding{GetTextureBinding(ctx, desc,
-                                                               samplers, textures, handle,
-                                                               stage.stage,
-                                                               srcStageMask, dstStageMask)};
-                                sampledImages[combinedImageSamplerIdx++] = binding.second;
+                                auto binding{GetTextureBinding(ctx, desc, samplers, textures, handle)};
+                                sampledImages[imageDescIdx++] = {binding.second, {
+                                    .isRead = true,
+                                    .isWritten = false,
+                                    .usedStage = stage.stage,
+                                    .usedFlags = vk::AccessFlagBits::eShaderRead
+                                }};
                                 return binding.first;
                             }, ctx.gpu.traits.quirks.needsIndividualTextureBindingWrites);
 
-            bindingIdx += stage.storageImageDescs.size();
+            writeImageDescs(vk::DescriptorType::eStorageImage, stage.storageImageDescs, stage.storageImageDescTotalCount,
+                            [&](const DescriptorInfo::StageDescriptorInfo::StorageImageDesc &desc, size_t arrayIdx) {
+                                BindlessHandle handle{ReadBindlessHandle(ctx, constantBuffers[i], desc, arrayIdx)};
+                                auto binding{GetStorageTextureBinding(ctx, desc, samplers, textures, handle, desc.format)};
+                                sampledImages[imageDescIdx++] = {binding.second, {
+                                    .isRead = desc.is_read,
+                                    .isWritten = desc.is_written,
+                                    .usedStage = stage.stage,
+                                    .usedFlags = (desc.is_read ? vk::AccessFlagBits::eShaderRead : vk::AccessFlags{}) | (desc.is_written ? vk::AccessFlagBits::eShaderWrite : vk::AccessFlags{})
+                                }};
+                                return binding.first;
+                            }, ctx.gpu.traits.quirks.needsIndividualTextureBindingWrites);
         }
 
         return ctx.executor.allocator->EmplaceUntracked<DescriptorUpdateInfo>(DescriptorUpdateInfo{
@@ -849,7 +870,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
         });
     }
 
-    DescriptorUpdateInfo *Pipeline::SyncDescriptorsQuickBind(InterconnectContext &ctx, ConstantBufferSet &constantBuffers, Samplers &samplers, Textures &textures, ConstantBuffers::QuickBind quickBind, span<TextureView *> sampledImages, vk::PipelineStageFlags &srcStageMask, vk::PipelineStageFlags &dstStageMask) {
+    DescriptorUpdateInfo *Pipeline::SyncDescriptorsQuickBind(InterconnectContext &ctx, ConstantBufferSet &constantBuffers, Samplers &samplers, Textures &textures, ConstantBuffers::QuickBind quickBind, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, vk::PipelineStageFlags &srcStageMask, vk::PipelineStageFlags &dstStageMask) {
         SyncCachedStorageBufferViews(ctx.executor.executionTag);
 
         size_t stageIndex{static_cast<size_t>(quickBind.stage)};
@@ -920,11 +941,26 @@ namespace skyline::gpu::interconnect::maxwell3d {
         writeDescs.operator()<true, false>(vk::DescriptorType::eCombinedImageSampler, cbufUsageInfo.combinedImageSamplers, stageDescInfo.combinedImageSamplerDescs,
                                            [&](auto usage, const DescriptorInfo::StageDescriptorInfo::CombinedImageSamplerDesc &desc, size_t arrayIdx) {
                                                BindlessHandle handle{ReadBindlessHandle(ctx, stageConstantBuffers, desc, arrayIdx)};
-                                               auto binding{GetTextureBinding(ctx, desc,
-                                                                              samplers, textures, handle,
-                                                                              stageDescInfo.stage,
-                                                                              srcStageMask, dstStageMask)};
-                                               sampledImages[usage.entirePipelineIdx + arrayIdx] = binding.second;
+                                               auto binding{GetTextureBinding(ctx, desc, samplers, textures, handle)};
+                                               sampledImages[usage.entirePipelineIdx + arrayIdx] = {binding.second, {
+                                                   .isRead = true,
+                                                   .isWritten = false,
+                                                   .usedStage = stageDescInfo.stage,
+                                                   .usedFlags = vk::AccessFlagBits::eShaderRead
+                                               }};
+                                               return binding.first;
+                                           });
+
+        writeDescs.operator()<true, false>(vk::DescriptorType::eStorageImage, cbufUsageInfo.storageImages, stageDescInfo.storageImageDescs,
+                                           [&](auto usage, const DescriptorInfo::StageDescriptorInfo::StorageImageDesc &desc, size_t arrayIdx) {
+                                               BindlessHandle handle{ReadBindlessHandle(ctx, stageConstantBuffers, desc, arrayIdx)};
+                                               auto binding{GetStorageTextureBinding(ctx, desc, samplers, textures, handle, desc.format)};
+                                               sampledImages[usage.entirePipelineIdx + arrayIdx] = {binding.second, {
+                                                   .isRead = desc.is_read,
+                                                   .isWritten = desc.is_written,
+                                                   .usedStage = stageDescInfo.stage,
+                                                   .usedFlags = (desc.is_read ? vk::AccessFlagBits::eShaderRead : vk::AccessFlags{}) | (desc.is_written ? vk::AccessFlagBits::eShaderWrite : vk::AccessFlags{})
+                                               }};
                                                return binding.first;
                                            });
 

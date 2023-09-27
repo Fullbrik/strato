@@ -93,9 +93,9 @@ namespace skyline::gpu {
 
         constexpr u32 TegraX1WarpSize{32}; //!< The amount of threads in a warp on the Tegra X1
         profile = Shader::Profile{
-            .supported_spirv = traits.supportsSpirv14 ? 0x00010400U : 0x00010000U,
+            .supported_spirv = traits.supportsSpirv14 ? 0x00010400U : 0x00010300U, //!< Since we require Vulkan 1.1 we can assume Spir-V 1.3 support
             .unified_descriptor_binding = true,
-            .support_descriptor_aliasing = true,
+            .support_descriptor_aliasing = false,
             .support_int8 = traits.supportsInt8,
             .support_int16 = traits.supportsInt16,
             .support_int64 = traits.supportsInt64,
@@ -134,10 +134,10 @@ namespace skyline::gpu {
         Shader::Settings::values = {
             #ifdef NDEBUG
             .renderer_debug = false,
-            .disable_shader_loop_safety_checks = false,
+            .disable_shader_loop_safety_checks = true,
             #else
             .renderer_debug = true,
-            .disable_shader_loop_safety_checks = true,
+            .disable_shader_loop_safety_checks = false,
             #endif
             .resolution_info = {
                 .active = false,

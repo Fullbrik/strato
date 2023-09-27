@@ -203,9 +203,9 @@ namespace skyline::gpu::interconnect::maxwell3d {
                 if (*view) {
                     ctx.executor.AttachBuffer(*view);
 
-                    if (view->GetBuffer()->SequencedCpuBackingWritesBlocked()) {
+                    if (ctx.gpu.traits.supportsTransformFeedback && view->GetBuffer()->SequencedCpuBackingWritesBlocked()) {
                         srcStageMask |= vk::PipelineStageFlagBits::eAllCommands;
-                        dstStageMask |=  vk::PipelineStageFlagBits::eTransformFeedbackEXT;
+                        dstStageMask |= vk::PipelineStageFlagBits::eTransformFeedbackEXT;
                     }
 
                     view->GetBuffer()->MarkGpuDirty(ctx.executor.usageTracker);
@@ -222,7 +222,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
     }
 
     bool TransformFeedbackBufferState::Refresh(InterconnectContext &ctx, StateUpdateBuilder &builder, vk::PipelineStageFlags &srcStageMask, vk::PipelineStageFlags &dstStageMask) {
-        if (*view && view->GetBuffer()->SequencedCpuBackingWritesBlocked()) {
+        if (ctx.gpu.traits.supportsTransformFeedback && *view && view->GetBuffer()->SequencedCpuBackingWritesBlocked()) {
             srcStageMask |= vk::PipelineStageFlagBits::eAllCommands;
             dstStageMask |=  vk::PipelineStageFlagBits::eTransformFeedbackEXT;
         }
@@ -462,19 +462,19 @@ namespace skyline::gpu::interconnect::maxwell3d {
         return pipeline.Get().pipeline;
     }
 
-    span<TextureView *> ActiveState::GetColorAttachments() {
+    span<HostTextureView *> ActiveState::GetColorAttachments() {
         return pipeline.Get().colorAttachments;
     }
 
-    TextureView *ActiveState::GetDepthAttachment() {
+    HostTextureView *ActiveState::GetDepthAttachment() {
         return pipeline.Get().depthAttachment;
     }
 
-    std::shared_ptr<TextureView> ActiveState::GetColorRenderTargetForClear(InterconnectContext &ctx, size_t index) {
-        return pipeline.Get().GetColorRenderTargetForClear(ctx, index);
+    HostTextureView * ActiveState::GetColorRenderTargetForClear(InterconnectContext &ctx, size_t index) {
+        return pipeline.Get().GetColorRenderTarget(ctx, index);
     }
 
-    std::shared_ptr<TextureView> ActiveState::GetDepthRenderTargetForClear(InterconnectContext &ctx) {
-        return pipeline.Get().GetDepthRenderTargetForClear(ctx);
+    HostTextureView * ActiveState::GetDepthRenderTargetForClear(InterconnectContext &ctx) {
+        return pipeline.Get().GetDepthRenderTarget(ctx);
     }
 }

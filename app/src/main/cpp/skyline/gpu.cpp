@@ -7,6 +7,7 @@
 #include <jvm.h>
 #include <common/settings.h>
 #include "gpu.h"
+#include "gpu/usage_tracker.h"
 
 namespace skyline::gpu {
     static vk::raii::Instance CreateInstance(const DeviceState &state, const vk::raii::Context &context) {
@@ -377,11 +378,9 @@ namespace skyline::gpu {
 
             if (!libvulkanHandle) {
                 char *error = dlerror();
-                LOGW("Failed to load builtin Vulkan driver: {}", error ? error : "");
-            }
-
-            if (!libvulkanHandle)
+                LOGE("Failed to load builtin Vulkan driver: {}", error ? error : "");
                 libvulkanHandle = dlopen("libvulkan.so", RTLD_NOW);
+            }
         }
 
         return reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(libvulkanHandle, "vkGetInstanceProcAddr"));
@@ -398,6 +397,7 @@ namespace skyline::gpu {
           memory(*this),
           scheduler(state, *this),
           presentation(state, *this),
+          textureUsageTracker(*this),
           texture(*this),
           buffer(*this),
           megaBufferAllocator(*this),

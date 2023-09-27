@@ -58,16 +58,41 @@ namespace skyline::gpu::memory {
             .vkGetImageMemoryRequirements2KHR = deviceDispatcher->vkGetImageMemoryRequirements2,
             .vkBindBufferMemory2KHR = deviceDispatcher->vkBindBufferMemory2,
             .vkBindImageMemory2KHR = deviceDispatcher->vkBindImageMemory2,
-            .vkGetPhysicalDeviceMemoryProperties2KHR = instanceDispatcher->vkGetPhysicalDeviceMemoryProperties2,
+            .vkGetPhysicalDeviceMemoryProperties2KHR = instanceDispatcher->vkGetPhysicalDeviceMemoryProperties2
         };
         VmaAllocatorCreateInfo allocatorCreateInfo{
             .physicalDevice = *gpu.vkPhysicalDevice,
             .device = *gpu.vkDevice,
             .instance = *gpu.vkInstance,
             .pVulkanFunctions = &vulkanFunctions,
-            .vulkanApiVersion = VkApiVersion,
+            .vulkanApiVersion = VkApiVersion
         };
         ThrowOnFail(vmaCreateAllocator(&allocatorCreateInfo, &vmaAllocator));
+
+        // Find memoryTypeIndex for the pool
+        vk::BufferCreateInfo sampleBufCreateInfo = {
+            .size = 0x10000, // Stub
+            .usage = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst,
+            .sharingMode = vk::SharingMode::eExclusive,
+            .queueFamilyIndexCount = 1,
+            .pQueueFamilyIndices = &gpu.vkQueueFamilyIndex
+        };
+        constexpr VmaAllocationCreateInfo sampleAllocCreateInfo = {
+            .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+            .usage = VMA_MEMORY_USAGE_UNKNOWN,
+            .requiredFlags = static_cast<VkMemoryPropertyFlags>(vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent),
+            .preferredFlags = static_cast<VkMemoryPropertyFlags>(vk::MemoryPropertyFlagBits::eHostCached)
+        };
+        uint32_t memTypeIndex;
+        ThrowOnFail(vmaFindMemoryTypeIndexForBufferInfo(vmaAllocator,&static_cast<const VkBufferCreateInfo &>(sampleBufCreateInfo), &sampleAllocCreateInfo, &memTypeIndex));
+
+        VmaPoolCreateInfo poolCreateInfo = {
+            .blockSize = 128 * 1024 * 1024, // Allocate in 128 MB chunks
+            .minBlockCount = 1,
+            .memoryTypeIndex = memTypeIndex,
+            .minAllocationAlignment = 64
+        };
+        ThrowOnFail(vmaCreatePool(vmaAllocator, &poolCreateInfo, &stagingPool));
     }
 
     MemoryManager::~MemoryManager() {
@@ -80,11 +105,11 @@ namespace skyline::gpu::memory {
             .usage = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst,
             .sharingMode = vk::SharingMode::eExclusive,
             .queueFamilyIndexCount = 1,
-            .pQueueFamilyIndices = &gpu.vkQueueFamilyIndex,
+            .pQueueFamilyIndices = &gpu.vkQueueFamilyIndex
         };
         VmaAllocationCreateInfo allocationCreateInfo{
             .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT,
-            .usage = VMA_MEMORY_USAGE_CPU_ONLY,
+            .pool = stagingPool
         };
 
         VkBuffer buffer;
@@ -103,10 +128,11 @@ namespace skyline::gpu::memory {
             .queueFamilyIndexCount = 1,
             .pQueueFamilyIndices = &gpu.vkQueueFamilyIndex,
         };
-        VmaAllocationCreateInfo allocationCreateInfo{
-            .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT,
+        constexpr VmaAllocationCreateInfo allocationCreateInfo{
+            .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
             .usage = VMA_MEMORY_USAGE_UNKNOWN,
-            .requiredFlags = static_cast<VkMemoryPropertyFlags>(vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eDeviceLocal),
+            .requiredFlags = static_cast<VkMemoryPropertyFlags>(vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent),
+            .preferredFlags = static_cast<VkMemoryPropertyFlags>(vk::MemoryPropertyFlagBits::eHostCached | vk::MemoryPropertyFlagBits::eDeviceLocal)
         };
 
         VkBuffer buffer;
@@ -114,12 +140,13 @@ namespace skyline::gpu::memory {
         VmaAllocationInfo allocationInfo;
         ThrowOnFail(vmaCreateBuffer(vmaAllocator, &static_cast<const VkBufferCreateInfo &>(bufferCreateInfo), &allocationCreateInfo, &buffer, &allocation, &allocationInfo));
 
-        return Buffer(reinterpret_cast<u8 *>(allocationInfo.pMappedData), size, vmaAllocator, buffer, allocation);
+        return {reinterpret_cast<u8 *>(allocationInfo.pMappedData), size, vmaAllocator, buffer, allocation};
     }
 
     Image MemoryManager::AllocateImage(const vk::ImageCreateInfo &createInfo) {
-        VmaAllocationCreateInfo allocationCreateInfo{
-            .usage = VMA_MEMORY_USAGE_GPU_ONLY,
+        constexpr VmaAllocationCreateInfo allocationCreateInfo{
+            .usage = VMA_MEMORY_USAGE_UNKNOWN,
+            .preferredFlags = static_cast<VkMemoryPropertyFlags>(vk::MemoryPropertyFlagBits::eDeviceLocal)
         };
 
         VkImage image;
@@ -127,13 +154,15 @@ namespace skyline::gpu::memory {
         VmaAllocationInfo allocationInfo;
         ThrowOnFail(vmaCreateImage(vmaAllocator, &static_cast<const VkImageCreateInfo &>(createInfo), &allocationCreateInfo, &image, &allocation, &allocationInfo));
 
-        return Image(vmaAllocator, image, allocation);
+        return {vmaAllocator, image, allocation};
     }
 
     Image MemoryManager::AllocateMappedImage(const vk::ImageCreateInfo &createInfo) {
-        VmaAllocationCreateInfo allocationCreateInfo{
+        constexpr VmaAllocationCreateInfo allocationCreateInfo{
+            .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
             .usage = VMA_MEMORY_USAGE_UNKNOWN,
-            .requiredFlags = static_cast<VkMemoryPropertyFlags>(vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eDeviceLocal),
+            .requiredFlags = static_cast<VkMemoryPropertyFlags>(vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent),
+            .preferredFlags = static_cast<VkMemoryPropertyFlags>(vk::MemoryPropertyFlagBits::eHostCached | vk::MemoryPropertyFlagBits::eDeviceLocal)
         };
 
         VkImage image;
@@ -141,7 +170,7 @@ namespace skyline::gpu::memory {
         VmaAllocationInfo allocationInfo;
         ThrowOnFail(vmaCreateImage(vmaAllocator, &static_cast<const VkImageCreateInfo &>(createInfo), &allocationCreateInfo, &image, &allocation, &allocationInfo));
 
-        return Image(vmaAllocator, image, allocation);
+        return {vmaAllocator, image, allocation};
     }
 
     ImportedBuffer MemoryManager::ImportBuffer(span<u8> cpuMapping) {
@@ -154,7 +183,9 @@ namespace skyline::gpu::memory {
         auto buffer{gpu.vkDevice.createBuffer(vk::BufferCreateInfo{
             .size = cpuMapping.size(),
             .usage = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eUniformTexelBuffer | vk::BufferUsageFlagBits::eStorageTexelBuffer | vk::BufferUsageFlagBits::eUniformBuffer | vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eIndirectBuffer | vk::BufferUsageFlagBits::eTransformFeedbackBufferEXT,
-            .sharingMode = vk::SharingMode::eExclusive
+            .sharingMode = vk::SharingMode::eExclusive,
+            .queueFamilyIndexCount = 1,
+            .pQueueFamilyIndices = &gpu.vkQueueFamilyIndex
         })};
 
         auto memory{gpu.vkDevice.allocateMemory(vk::MemoryAllocateInfo{
@@ -171,6 +202,6 @@ namespace skyline::gpu::memory {
             .memoryOffset = 0
         }});
 
-        return ImportedBuffer{cpuMapping, std::move(buffer), std::move(memory)};
+        return {cpuMapping, std::move(buffer), std::move(memory)};
     }
 }

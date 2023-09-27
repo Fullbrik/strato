@@ -40,7 +40,7 @@ namespace skyline::gpu::memory {
     /**
      * @brief A Buffer that can be independently attached to a fence cycle
      */
-    class StagingBuffer : public Buffer {
+    class StagingBuffer : public Buffer, public std::enable_shared_from_this<StagingBuffer> {
         using Buffer::Buffer;
     };
 
@@ -81,6 +81,8 @@ namespace skyline::gpu::memory {
         VmaAllocation vmaAllocation;
         vk::Image vkImage;
 
+        constexpr Image() : vmaAllocator{nullptr}, vkImage{nullptr}, vmaAllocation{nullptr} {};
+
         constexpr Image(VmaAllocator vmaAllocator, vk::Image vkImage, VmaAllocation vmaAllocation)
             : vmaAllocator(vmaAllocator),
               vkImage(vkImage),
@@ -102,7 +104,13 @@ namespace skyline::gpu::memory {
 
         Image &operator=(const Image &) = delete;
 
-        Image &operator=(Image &&) = default;
+        Image &operator=(Image && other) {
+            pointer = std::exchange(other.pointer, nullptr);
+            vmaAllocator = std::exchange(other.vmaAllocator, nullptr);
+            vmaAllocation = std::exchange(other.vmaAllocation, nullptr);
+            vkImage = std::exchange(other.vkImage, {});
+            return *this;
+        }
 
         ~Image();
 
@@ -120,6 +128,7 @@ namespace skyline::gpu::memory {
       private:
         GPU &gpu;
         VmaAllocator vmaAllocator{VK_NULL_HANDLE};
+        VmaPool stagingPool{VK_NULL_HANDLE};
 
       public:
         MemoryManager(GPU &gpu);

@@ -114,7 +114,7 @@ namespace skyline {
                     waitEnd = nullptr;
                 }
 
-                std::scoped_lock lock{productionMutex};
+                std::unique_lock lock{productionMutex};
                 auto next{end + 1};
                 next = (next == reinterpret_cast<Type *>(vector.end().base())) ? reinterpret_cast<Type *>(vector.begin().base()) : next;
                 if (next == start) {

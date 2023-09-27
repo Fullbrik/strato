@@ -4,11 +4,14 @@
 // Copyright © 2019-2020 Ryujinx Team and Contributors (https://github.com/Ryujinx/)
 
 #include <gpu.h>
-#include <gpu/texture/format.h>
+#include <gpu/texture/formats.h>
 #include <soc.h>
 #include <services/nvdrv/devices/nvmap.h>
 #include <services/common/fence.h>
+#include <vulkan/vulkan_enums.hpp>
+#include <vulkan/vulkan_structs.hpp>
 #include "GraphicBufferProducer.h"
+#include "gpu/command_scheduler.h"
 
 namespace skyline::service::hosbinder {
     GraphicBufferProducer::GraphicBufferProducer(const DeviceState &state, nvdrv::core::NvMap &nvMap) : state(state), bufferEvent(std::make_shared<kernel::type::KEvent>(state, true)), nvMap(nvMap) {}
@@ -285,7 +288,7 @@ namespace skyline::service::hosbinder {
             return AndroidStatus::BadValue;
         }
 
-        if (!buffer.texture) [[unlikely]] {
+        if (!buffer.texture || buffer.texture->stale) [[unlikely]] {
             // We lazily create a texture if one isn't present at queue time, this allows us to look up the texture in the texture cache
             // If we deterministically know that the texture is written by the CPU then we can allocate a CPU-shared host texture for fast uploads
 
@@ -330,23 +333,33 @@ namespace skyline::service::hosbinder {
                 tileConfig = {
                     .mode = gpu::texture::TileMode::Block,
                     .blockHeight = static_cast<u8>(1U << surface.blockHeightLog2),
-                    .blockDepth = 1,
+                    .blockDepth = 1
                 };
             } else if (surface.layout == NvSurfaceLayout::Pitch) {
                 tileConfig = {
                     .mode = gpu::texture::TileMode::Pitch,
-                    .pitch = surface.pitch,
+                    .pitch = surface.pitch
                 };
             } else if (surface.layout == NvSurfaceLayout::Tiled) {
                 throw exception("Legacy 16Bx16 tiled surfaces are not supported");
             }
 
-            gpu::texture::Dimensions dimensions(surface.width, surface.height);
-            gpu::GuestTexture guestTexture(span<u8>{}, dimensions, format, tileConfig, vk::ImageViewType::e2D);
-            guestTexture.mappings[0] = span<u8>(nvMapHandleObj->GetPointer() + surface.offset, guestTexture.GetLayerStride());
+            gpu::texture::Dimensions dimensions{surface.width, surface.height};
+            u32 layerStride{gpu::texture::CalculateLayerStride(dimensions, format, tileConfig, 1, 1)};
+            span<u8> mapping{nvMapHandleObj->GetPointer() + surface.offset, layerStride};
 
             std::scoped_lock channelLock{state.gpu->channelLock};
-            buffer.texture = state.gpu->texture.FindOrCreate(guestTexture);
+
+            gpu::ContextTag tag{gpu::AllocateTag()};
+            buffer.texture = state.gpu->texture.FindOrCreate({
+                .tag = tag,
+                .mappings = gpu::texture::Mappings{mapping},
+                .sampleDimensions = dimensions,
+                .tileConfig = tileConfig,
+                .layerStride = layerStride,
+                .viewFormat = format,
+                .viewAspect = format->vkAspect
+            });
         }
 
         switch (transform) {

@@ -57,7 +57,13 @@ namespace skyline::service::nvdrv::device::nvhost {
     }
 
     PosixResult CtrlGpu::GetGpuTime(Out<u64> time) {
-        time = static_cast<u64>(util::GetTimeNs());
+        constexpr i64 NsToTickNumerator{384};
+        constexpr i64 NsToTickDenominator{625};
+
+        i64 nsTime{util::GetTimeNs()};
+        i64 timestamp{(nsTime / NsToTickDenominator) * NsToTickNumerator + ((nsTime % NsToTickDenominator) * NsToTickNumerator) / NsToTickDenominator};
+
+        time = static_cast<u64>(timestamp / 255);
         return PosixResult::Success;
     }
 

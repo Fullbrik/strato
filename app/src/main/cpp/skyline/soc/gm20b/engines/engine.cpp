@@ -11,9 +11,7 @@ namespace skyline::soc::gm20b::engine {
         i64 nsTime{util::GetTimeNs()};
         i64 timestamp{(nsTime / NsToTickDenominator) * NsToTickNumerator + ((nsTime % NsToTickDenominator) * NsToTickNumerator) / NsToTickDenominator};
 
-        // By reporting that less time has passed on the  GPU than has actually passed we can avoid dynamic resolution kicking in
-        // TODO: add a setting for this after global settings
-        return static_cast<u64>(timestamp / 256);
+        return static_cast<u64>(timestamp / 255);
     }
 
     MacroEngineBase::MacroEngineBase(MacroState &macroState) : macroState(macroState) {}

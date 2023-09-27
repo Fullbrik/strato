@@ -17,10 +17,9 @@ namespace skyline::gpu::interconnect {
 
     void Inline2Memory::UploadSingleMapping(span<u8> dst, span<u8> src) {
         auto dstBuf{gpu.buffer.FindOrCreate(dst, executor.tag, [this](std::shared_ptr<Buffer> buffer, ContextLock<Buffer> &&lock) {
-            executor.AttachLockedBuffer(buffer, std::move(lock));
+            executor.AttachLockedBuffer(std::move(buffer), std::move(lock));
         })};
         ContextLock dstBufLock{executor.tag, dstBuf};
-
 
         dstBuf.Write(src, 0, executor.usageTracker, [&]() {
             executor.AttachLockedBufferView(dstBuf, std::move(dstBufLock));

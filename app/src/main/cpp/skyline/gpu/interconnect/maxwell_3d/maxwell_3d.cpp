@@ -6,6 +6,9 @@
 #include <gpu/interconnect/conversion/quads.h>
 #include <gpu/interconnect/common/state_updater.h>
 #include <soc/gm20b/channel.h>
+
+#include <utility>
+#include <vulkan/vulkan_enums.hpp>
 #include "common/utils.h"
 #include "maxwell_3d.h"
 #include "common.h"
@@ -121,11 +124,11 @@ namespace skyline::gpu::interconnect::maxwell3d {
 
         auto colorAttachments{activeState.GetColorAttachments()};
         auto depthStencilAttachment{activeState.GetDepthAttachment()};
-        auto depthStencilAttachmentSpan{depthStencilAttachment ? span<TextureView *>(depthStencilAttachment) : span<TextureView *>()};
+        auto depthStencilAttachmentSpan{depthStencilAttachment ? span<HostTextureView *>(depthStencilAttachment) : span<HostTextureView *>()};
         for (auto attachment : ranges::views::concat(colorAttachments, depthStencilAttachmentSpan)) {
             if (attachment) {
-                scissor.extent.width = std::min(scissor.extent.width, static_cast<u32>(static_cast<i32>(attachment->texture->dimensions.width) - scissor.offset.x));
-                scissor.extent.height = std::min(scissor.extent.height, static_cast<u32>(static_cast<i32>(attachment->texture->dimensions.height) - scissor.offset.y));
+                scissor.extent.width = std::min(scissor.extent.width, static_cast<u32>(static_cast<i32>(attachment->hostTexture->dimensions.width) - scissor.offset.x));
+                scissor.extent.height = std::min(scissor.extent.height, static_cast<u32>(static_cast<i32>(attachment->hostTexture->dimensions.height) - scissor.offset.y));
             }
         }
 
@@ -203,17 +206,18 @@ namespace skyline::gpu::interconnect::maxwell3d {
         constantBuffers.DisableQuickBind();
     }
 
+    // TODO: Make AddClearColorSubpass/AddClearDepthStencilSubpass detect if the texture has been used in the render pass already before clearing
     void Maxwell3D::Clear(engine::ClearSurface &clearSurface) {
         auto scissor{GetClearScissor()};
-        if (scissor.extent.width == 0 || scissor.extent.height == 0)
+        if (scissor.extent.width == 0 || scissor.extent.height == 0) [[unlikely]]
             return;
 
         TRACE_EVENT("gpu", "Maxwell3D::Clear");
         ctx.executor.AddCheckpoint("Before clear");
 
-        auto needsAttachmentClearCmd{[&](auto &view) {
+        auto needsAttachmentClearCmd{[&scissor, &clearSurface](auto view) {
             return scissor.offset.x != 0 || scissor.offset.y != 0 ||
-                scissor.extent != vk::Extent2D{view->texture->dimensions} ||
+                scissor.extent != vk::Extent2D{view->hostTexture->dimensions} ||
                 view->range.layerCount != 1 || view->range.baseArrayLayer != 0 || clearSurface.rtArrayIndex != 0;
         }};
 
@@ -224,42 +228,38 @@ namespace skyline::gpu::interconnect::maxwell3d {
         auto clearRects{util::MakeFilledArray<vk::ClearRect, 2>(vk::ClearRect{.rect = scissor, .baseArrayLayer = clearSurface.rtArrayIndex, .layerCount = 1})};
         boost::container::small_vector<vk::ClearAttachment, 2> clearAttachments;
 
-        std::shared_ptr<TextureView> colorView{};
-        std::shared_ptr<TextureView> depthStencilView{};
+        HostTextureView *colorView{};
+        HostTextureView *depthStencilView{};
 
         if (clearSurface.rEnable || clearSurface.gEnable || clearSurface.bEnable || clearSurface.aEnable) {
             if (auto view{activeState.GetColorRenderTargetForClear(ctx, clearSurface.mrtSelect)}) {
-                ctx.executor.AttachTexture(&*view);
-
                 bool partialClear{!(clearSurface.rEnable && clearSurface.gEnable && clearSurface.bEnable && clearSurface.aEnable)};
-                if (!(view->range.aspectMask & vk::ImageAspectFlagBits::eColor))
-                    LOGW("Colour RT used in clear lacks colour aspect"); // TODO: Drop this check after texman rework
 
-
-                if (partialClear) {
+                if (partialClear || needsAttachmentClearCmd(view)) {
                     ctx.gpu.helperShaders.clearHelperShader.Clear(ctx.gpu, view->range.aspectMask,
                                                                   (clearSurface.rEnable ? vk::ColorComponentFlagBits::eR : vk::ColorComponentFlags{}) |
                                                                   (clearSurface.gEnable ? vk::ColorComponentFlagBits::eG : vk::ColorComponentFlags{}) |
                                                                   (clearSurface.bEnable ? vk::ColorComponentFlagBits::eB : vk::ColorComponentFlags{}) |
                                                                   (clearSurface.aEnable ? vk::ColorComponentFlagBits::eA : vk::ColorComponentFlags{}),
-                                                                  {clearEngineRegisters.colorClearValue}, &*view, [=](auto &&executionCallback) {
-                        auto dst{view.get()};
-                        ctx.executor.AddSubpass(std::move(executionCallback), renderArea, {}, {}, span<TextureView *>{dst}, nullptr);
+                                                                  {clearEngineRegisters.colorClearValue}, view, [&view, &executor = ctx.executor, &renderArea](auto &&executionCallback) {
+                        executor.AddSubpass(std::forward<decltype(executionCallback)>(executionCallback), renderArea, {}, {view}, {
+                            .isRead = false,
+                            .isWritten = true,
+                            .usedStage = vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                            .usedFlags = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eColorAttachmentWrite
+                        });
                     });
                     ctx.executor.NotifyPipelineChange();
-                } else if (needsAttachmentClearCmd(view)) {
-                    clearAttachments.push_back({.aspectMask = view->range.aspectMask, .clearValue = {clearEngineRegisters.colorClearValue}});
-                    colorView = view;
                 } else {
-                    ctx.executor.AddClearColorSubpass(&*view, clearEngineRegisters.colorClearValue);
+                    //ctx.executor.AddClearColorSubpass(renderArea, view, {clearEngineRegisters.colorClearValue});
+                    clearAttachments.push_back({.aspectMask = vk::ImageAspectFlagBits::eColor, .clearValue = {clearEngineRegisters.colorClearValue}});
+                    colorView = view;
                 }
             }
         }
 
         if (clearSurface.stencilEnable || clearSurface.zEnable) {
             if (auto view{activeState.GetDepthRenderTargetForClear(ctx)}) {
-                ctx.executor.AttachTexture(&*view);
-
                 bool viewHasDepth{view->range.aspectMask & vk::ImageAspectFlagBits::eDepth}, viewHasStencil{view->range.aspectMask & vk::ImageAspectFlagBits::eStencil};
                 vk::ImageAspectFlags clearAspectMask{(clearSurface.zEnable ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlags{}) |
                                                      (clearSurface.stencilEnable ? vk::ImageAspectFlagBits::eStencil : vk::ImageAspectFlags{})};
@@ -270,29 +270,50 @@ namespace skyline::gpu::interconnect::maxwell3d {
                     .stencil = clearEngineRegisters.stencilClearValue
                 };
 
-                if (!clearAspectMask) {
-                    LOGW("Depth stencil RT used in clear lacks depth or stencil aspects"); // TODO: Drop this check after texman rework
-                    return;
-                }
-
-                if (needsAttachmentClearCmd(view) || (clearAspectMask != view->range.aspectMask)) { // Subpass clears write to all aspects of the texture, so we can't use them when only one component is enabled
+                // TODO: We could get rp clears to work with either stencil or depth separately
+                if (needsAttachmentClearCmd(view) || (!clearSurface.stencilEnable && viewHasStencil) || (!clearSurface.zEnable && viewHasDepth)) {
                     clearAttachments.push_back({.aspectMask = clearAspectMask, .clearValue = clearValue});
                     depthStencilView = view;
                 } else {
-                    ctx.executor.AddClearDepthStencilSubpass(&*view, clearValue);
+                    //ctx.executor.AddClearDepthStencilSubpass(renderArea, view, clearValue);
+                    clearAttachments.push_back({.aspectMask = clearAspectMask, .clearValue = clearValue});
+                    depthStencilView = view;
                 }
             }
         }
 
         if (!clearAttachments.empty()) {
-            std::array<TextureView *, 1> colorAttachments{colorView ? &*colorView : nullptr};
-            ctx.executor.AddSubpass([clearAttachments, clearRects](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &, vk::RenderPass, u32) {
+            ctx.executor.AddSubpass([clearAttachments, clearRects](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &) {
                 commandBuffer.clearAttachments(clearAttachments, span(clearRects).first(clearAttachments.size()));
-            }, renderArea, {}, {}, colorView ? colorAttachments : span<TextureView *>{}, depthStencilView ? &*depthStencilView : nullptr);
+            }, renderArea, {}, {colorView},{
+                .isRead = false,
+                .isWritten = true,
+                .usedStage = vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                .usedFlags = vk::AccessFlagBits::eColorAttachmentWrite
+            }, {depthStencilView, {
+                .isRead = false,
+                .isWritten = true,
+                .usedStage = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests,
+                .usedFlags = vk::AccessFlagBits::eDepthStencilAttachmentWrite
+            }});
         }
 
         ctx.executor.AddCheckpoint("After clear");
     }
+
+    constexpr TextureSyncRequestArgs colorDrawSyncRequestArgs{
+        .isRead = true,
+        .isWritten = true,
+        .usedStage = vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        .usedFlags = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite
+    };
+
+    constexpr TextureSyncRequestArgs depthStencilDrawSyncRequestArgs{
+        .isRead = true,
+        .isWritten = true,
+        .usedStage = vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests,
+        .usedFlags = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite
+    };
 
     void Maxwell3D::Draw(engine::DrawTopology topology, bool transformFeedbackEnable, bool indexed, u32 count, u32 first, u32 instanceCount, u32 vertexOffset, u32 firstInstance) {
         TRACE_EVENT("gpu", "Draw", "indexed", indexed, "count", count, "instanceCount", instanceCount);
@@ -331,14 +352,13 @@ namespace skyline::gpu::interconnect::maxwell3d {
         };
         auto *drawParams{ctx.executor.allocator->EmplaceUntracked<DrawParams>(DrawParams{stateUpdater,
                                                                                          count, first, instanceCount, vertexOffset, firstInstance, indexed,
-                                                                                         ctx.gpu.traits.supportsTransformFeedback ? transformFeedbackEnable : false})};
+                                                                                         ctx.gpu.traits.supportsTransformFeedback && transformFeedbackEnable})};
 
         vk::Rect2D scissor{GetDrawScissor()};
-
-
         constantBuffers.ResetQuickBind();
+
         ctx.executor.AddCheckpoint("Before draw");
-        ctx.executor.AddSubpass([drawParams](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu, vk::RenderPass, u32) {
+        ctx.executor.AddSubpass([drawParams](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu) {
             drawParams->stateUpdater.RecordAll(gpu, commandBuffer);
 
             if (drawParams->transformFeedbackEnable)
@@ -351,7 +371,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
 
             if (drawParams->transformFeedbackEnable)
                 commandBuffer.endTransformFeedbackEXT(0, {}, {});
-        }, scissor, activeDescriptorSetSampledImages, {}, activeState.GetColorAttachments(), activeState.GetDepthAttachment(), !ctx.gpu.traits.quirks.relaxedRenderPassCompatibility, srcStageMask, dstStageMask);
+        }, scissor, activeDescriptorSetSampledImages, activeState.GetColorAttachments(), colorDrawSyncRequestArgs, {activeState.GetDepthAttachment(), depthStencilDrawSyncRequestArgs}, srcStageMask, dstStageMask);
         ctx.executor.AddCheckpoint("After draw");
     }
 
@@ -366,14 +386,14 @@ namespace skyline::gpu::interconnect::maxwell3d {
 
         PrepareDraw(builder, topology, indexed, true, 0, 0, srcStageMask, dstStageMask);
 
-        if (directState.inputAssembly.NeedsQuadConversion())
+        if (directState.inputAssembly.NeedsQuadConversion()) [[unlikely]]
             throw exception("Quad conversion is not supported for indirect draws!");
 
         if (indirectBufferView)
             indirectBufferView = indirectBufferView.GetBuffer()->TryGetView(indirectBuffer);
         if (!indirectBufferView)
             indirectBufferView = ctx.gpu.buffer.FindOrCreate(indirectBuffer, ctx.executor.tag, [this](std::shared_ptr<Buffer> buffer, ContextLock<Buffer> &&lock) {
-                ctx.executor.AttachLockedBuffer(buffer, std::move(lock));
+                ctx.executor.AttachLockedBuffer(std::move(buffer), std::forward<decltype(lock)>(lock));
             });
 
         indirectBufferView.GetBuffer()->BlockSequencedCpuBackingWrites();
@@ -394,13 +414,13 @@ namespace skyline::gpu::interconnect::maxwell3d {
         auto *drawParams{ctx.executor.allocator->EmplaceUntracked<DrawParams>(DrawParams{stateUpdater,
                                                                                          indirectBufferView,
                                                                                          count, stride, indexed,
-                                                                                         ctx.gpu.traits.supportsTransformFeedback ? transformFeedbackEnable : false})};
+                                                                                         ctx.gpu.traits.supportsTransformFeedback && transformFeedbackEnable})};
 
         auto scissor{GetDrawScissor()};
         constantBuffers.ResetQuickBind();
 
         ctx.executor.AddCheckpoint("Before indirect draw");
-        ctx.executor.AddSubpass([drawParams](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu, vk::RenderPass, u32) {
+        ctx.executor.AddSubpass([drawParams](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu) {
             drawParams->stateUpdater.RecordAll(gpu, commandBuffer);
 
             if (drawParams->transformFeedbackEnable)
@@ -414,12 +434,12 @@ namespace skyline::gpu::interconnect::maxwell3d {
 
             if (drawParams->transformFeedbackEnable)
                 commandBuffer.endTransformFeedbackEXT(0, {}, {});
-        }, scissor, activeDescriptorSetSampledImages, {}, activeState.GetColorAttachments(), activeState.GetDepthAttachment(), !ctx.gpu.traits.quirks.relaxedRenderPassCompatibility, srcStageMask, dstStageMask);
+        }, scissor, activeDescriptorSetSampledImages, activeState.GetColorAttachments(), colorDrawSyncRequestArgs, {activeState.GetDepthAttachment(), depthStencilDrawSyncRequestArgs}, srcStageMask, dstStageMask);
         ctx.executor.AddCheckpoint("After indirect draw");
     }
 
     void Maxwell3D::Query(soc::gm20b::IOVA address, engine::SemaphoreInfo::CounterType type, std::optional<u64> timestamp) {
-        if (type != engine::SemaphoreInfo::CounterType::SamplesPassed) {
+        if (type != engine::SemaphoreInfo::CounterType::SamplesPassed) [[unlikely]] {
             LOGE("Unsupported query type: {}", static_cast<u32>(type));
             return;
         }
@@ -428,7 +448,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
     }
 
     void Maxwell3D::ResetCounter(engine::ClearReportValue::Type type) {
-        if (type != engine::ClearReportValue::Type::ZPassPixelCount) {
+        if (type != engine::ClearReportValue::Type::ZPassPixelCount) [[unlikely]] {
             LOGD("Unsupported query type: {}", static_cast<u32>(type));
             return;
         }

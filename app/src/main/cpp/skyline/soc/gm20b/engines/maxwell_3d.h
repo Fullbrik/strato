@@ -158,6 +158,8 @@ namespace skyline::soc::gm20b::engine::maxwell3d {
             };
             Register<0x370, DepthBiasEnable> depthBiasEnable;
 
+            Register<0x378, u32> pixelShaderBarrier;
+
             Register<0x3D5, type::BackStencilValues> backStencilValues;
 
             Register<0x3D8, u32> tiledCacheEnable;
@@ -242,6 +244,10 @@ namespace skyline::soc::gm20b::engine::maxwell3d {
             };
             Register<0x4C7, std::array<float, type::BlendColorChannelCount>> blendConsts;
 
+            Register<0x4CC, u32> invalidateSamplerCache;
+
+            Register<0x4CD, u32> invalidateTextureHeaderCache;
+
             Register<0x4CF, type::Blend> blend;
             Register<0x4E0, u32> stencilTestEnable;
 
@@ -252,6 +258,9 @@ namespace skyline::soc::gm20b::engine::maxwell3d {
 
             Register<0x4EC, float> lineWidth;
             Register<0x4ED, float> lineWidthAliased;
+
+            Register<0x509, u32> invalidateSamplerCacheNoWfi;
+            Register<0x50A, u32> invalidateTextureHeaderCacheNoWfi;
 
             Register<0x50D, u32> globalBaseVertexIndex;
             Register<0x50E, u32> globalBaseInstanceIndex;
@@ -295,6 +304,8 @@ namespace skyline::soc::gm20b::engine::maxwell3d {
             Register<0x566, type::StencilOps> stencilBack;
 
             Register<0x56F, float> depthBias;
+
+            Register<0x574, type::MsaaMode> msaaMode;
 
             Register<0x57A, u32> drawInlineIndex;
 

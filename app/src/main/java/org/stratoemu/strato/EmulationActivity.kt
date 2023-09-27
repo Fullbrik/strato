@@ -178,6 +178,8 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
      */
     private external fun updatePerformanceStatistics()
 
+    private external fun onTrim(level : Int)
+
     /**
      * @see [InputHandler.initializeControllers]
      */
@@ -511,6 +513,12 @@ class EmulationActivity : AppCompatActivity(), SurfaceHolder.Callback, View.OnTo
                 isGone = !emulationSettings.showPauseButton
             }
         }
+    }
+
+    override fun onTrimMemory(level : Int) {
+        onTrim(level)
+
+        super.onTrimMemory(level)
     }
 
     /**

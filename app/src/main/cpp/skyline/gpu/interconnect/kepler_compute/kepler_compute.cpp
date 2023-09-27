@@ -28,7 +28,7 @@ namespace skyline::gpu::interconnect::kepler_compute {
     }
 
     void KeplerCompute::Dispatch(const QMD &qmd) {
-        if (ctx.gpu.traits.quirks.brokenComputeShaders)
+        if (ctx.gpu.traits.quirks.brokenComputeShaders) [[unlikely]]
             return;
 
         TRACE_EVENT("gpu", "KeplerCompute::Dispatch");
@@ -43,13 +43,15 @@ namespace skyline::gpu::interconnect::kepler_compute {
         auto *descUpdateInfo{pipeline->SyncDescriptors(ctx, constantBuffers.boundConstantBuffers, samplers, textures, srcStageMask, dstStageMask)};
         builder.SetPipeline(*pipeline->compiledPipeline.pipeline, vk::PipelineBindPoint::eCompute);
 
-        if (ctx.gpu.traits.supportsPushDescriptors) {
-            builder.SetDescriptorSetWithPush(descUpdateInfo);
-        } else {
-            auto set{std::make_shared<DescriptorAllocator::ActiveDescriptorSet>(ctx.gpu.descriptor.AllocateSet(descUpdateInfo->descriptorSetLayout))};
+        if (descUpdateInfo) {
+            if (ctx.gpu.traits.supportsPushDescriptors) {
+                builder.SetDescriptorSetWithPush(descUpdateInfo);
+            } else {
+                auto set{std::make_shared<DescriptorAllocator::ActiveDescriptorSet>(ctx.gpu.descriptor.AllocateSet(descUpdateInfo->descriptorSetLayout))};
 
-            builder.SetDescriptorSetWithUpdate(descUpdateInfo, set.get(), nullptr);
-            ctx.executor.AttachDependency(set);
+                builder.SetDescriptorSetWithUpdate(descUpdateInfo, set.get(), nullptr);
+                ctx.executor.AttachDependency(set);
+            }
         }
 
         auto stateUpdater{builder.Build()};
@@ -70,10 +72,10 @@ namespace skyline::gpu::interconnect::kepler_compute {
             drawParams->stateUpdater.RecordAll(gpu, commandBuffer);
 
             if (drawParams->srcStageMask && drawParams->dstStageMask)
-                commandBuffer.pipelineBarrier(drawParams->srcStageMask, drawParams->dstStageMask, {}, {vk::MemoryBarrier{
+                commandBuffer.pipelineBarrier(drawParams->srcStageMask, drawParams->dstStageMask, {}, vk::MemoryBarrier{
                     .srcAccessMask = vk::AccessFlagBits::eMemoryWrite,
                     .dstAccessMask = vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite
-                }}, {}, {});
+                }, {}, {});
 
             commandBuffer.dispatch(drawParams->dimensions[0], drawParams->dimensions[1], drawParams->dimensions[2]);
         });

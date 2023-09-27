@@ -36,9 +36,12 @@ namespace skyline::gpu::interconnect {
     class Samplers {
       private:
         dirty::ManualDirtyState<SamplerPoolState> samplerPool;
+        std::unique_ptr<vk::raii::Sampler> defaultSampler{};
 
         tsl::robin_map<TextureSamplerControl, std::unique_ptr<vk::raii::Sampler>, util::ObjectHash<TextureSamplerControl>> texSamplerStore;
         std::vector<vk::raii::Sampler *> texSamplerCache;
+
+        vk::raii::Sampler *GetDefaultSampler(InterconnectContext &ctx);
 
       public:
         Samplers(DirtyManager &manager, const SamplerPoolState::EngineRegisters &engine);

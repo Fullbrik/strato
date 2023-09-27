@@ -148,7 +148,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
                     Shader::TextureType type;
                     Shader::ImageFormat format;
                     u32 cbuf_offset;
-                    bool isRead;
+                    bool is_read;
                     bool is_written;
                     u8 cbuf_index;
                     u8 count;
@@ -158,7 +158,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
                         : type{desc.type},
                           format{desc.format},
                           cbuf_offset{desc.cbuf_offset},
-                          isRead{desc.is_read},
+                          is_read{desc.is_read},
                           is_written{desc.is_written},
                           cbuf_index{static_cast<u8>(desc.cbuf_index)},
                           count{static_cast<u8>(desc.count)},
@@ -185,6 +185,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
                     boost::container::small_vector<Usage, 2> uniformBuffers;
                     boost::container::small_vector<Usage, 2> storageBuffers;
                     boost::container::small_vector<Usage, 2> combinedImageSamplers;
+                    boost::container::small_vector<Usage, 2> storageImages;
                     u16 totalBufferDescCount;
                     u16 totalImageDescCount;
                     u16 writeDescCount;
@@ -202,6 +203,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
 
             u16 totalStorageBufferCount;
             u16 totalCombinedImageSamplerCount;
+            u16 totalStorageImageCount;
 
             u16 totalWriteDescCount;
             u16 totalBufferDescCount;
@@ -250,13 +252,13 @@ namespace skyline::gpu::interconnect::maxwell3d {
          * @brief Creates a descriptor set update from the current GPU state
          * @param sampledImages A span of size `GetTotalSampledImageCount()` in which texture view pointers for each sampled image will be written
          */
-        DescriptorUpdateInfo *SyncDescriptors(InterconnectContext &ctx, ConstantBufferSet &constantBuffers, Samplers &samplers, Textures &textures, span<TextureView *> sampledImages, vk::PipelineStageFlags &srcStageMask, vk::PipelineStageFlags &dstStageMask);
+        DescriptorUpdateInfo *SyncDescriptors(InterconnectContext &ctx, ConstantBufferSet &constantBuffers, Samplers &samplers, Textures &textures, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, vk::PipelineStageFlags &srcStageMask, vk::PipelineStageFlags &dstStageMask);
 
         /**
          * @brief Creates a partial descriptor set update from the current GPU state for only the subset of descriptors changed by the quick bind constant buffer
          * @param sampledImages A span of size `GetTotalSampledImageCount()` in which texture view pointers for each sampled image will be written
          */
-        DescriptorUpdateInfo *SyncDescriptorsQuickBind(InterconnectContext &ctx, ConstantBufferSet &constantBuffers, Samplers &samplers, Textures &textures, ConstantBuffers::QuickBind quickBind, span<TextureView *> sampledImages, vk::PipelineStageFlags &srcStageMask, vk::PipelineStageFlags &dstStageMask);
+        DescriptorUpdateInfo *SyncDescriptorsQuickBind(InterconnectContext &ctx, ConstantBufferSet &constantBuffers, Samplers &samplers, Textures &textures, ConstantBuffers::QuickBind quickBind, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, vk::PipelineStageFlags &srcStageMask, vk::PipelineStageFlags &dstStageMask);
     };
 
     /**

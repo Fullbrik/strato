@@ -22,7 +22,7 @@ namespace skyline::soc::gm20b::engine::fermi2d {
             auto &dst{*registers.dst};
             auto &pixelsFromMemory{*registers.pixelsFromMemory};
 
-            if (src.layer != 0 || dst.layer != 0)
+            if (dst.layer != 0)
                 LOGW("Blits between layers are unimplemented!");
 
             if (pixelsFromMemory.safeOverlap)

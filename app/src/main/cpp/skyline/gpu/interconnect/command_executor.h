@@ -6,13 +6,20 @@
 #include <boost/container/stable_vector.hpp>
 #include <renderdoc_app.h>
 #include <common/linear_allocator.h>
-#include <gpu/usage_tracker.h>
 #include <gpu/megabuffer.h>
 #include "command_nodes.h"
 #include "common/spin_lock.h"
 
+namespace skyline::gpu {
+    struct UsageTracker;
+    struct TextureSyncRequestArgs;
+    class HostTexture;
+}
+
 namespace skyline::gpu::interconnect {
     constexpr bool EnableGpuCheckpoints{false}; //!< Whether to enable GPU debugging checkpoints (WILL DECREASE PERF SIGNIFICANTLY)
+
+    using ExecutorCommand = std::function<void(vk::raii::CommandBuffer &, const std::shared_ptr<FenceCycle> &, GPU &)> &&;
 
     /*
      * @brief Thread responsible for recording Vulkan commands from the execution nodes and submitting them
@@ -41,6 +48,7 @@ namespace skyline::gpu::interconnect {
             std::shared_ptr<FenceCycle> cycle;
             LinearAllocatorState<> allocator;
             std::list<node::NodeVariant, LinearAllocator<node::NodeVariant>> nodes;
+            std::list<node::NodeVariant, LinearAllocator<node::NodeVariant>> pendingRenderPassEndNodes;
             std::list<node::NodeVariant, LinearAllocator<node::NodeVariant>> pendingPostRenderPassNodes;
             std::mutex beginLock;
             std::condition_variable beginCondition;
@@ -51,7 +59,7 @@ namespace skyline::gpu::interconnect {
 
             Slot(GPU &gpu);
 
-            Slot(Slot &&other);
+            Slot(Slot &&other) noexcept;
 
             /**
              * @brief Waits on the fence and resets the command buffer
@@ -125,7 +133,7 @@ namespace skyline::gpu::interconnect {
     /**
      * @brief Polls the debug buffer for checkpoint updates and reports them to perfetto
      */
-    class CheckpointPollerThread {
+    class [[maybe_unused]] CheckpointPollerThread {
       private:
         const DeviceState &state;
         std::thread thread;
@@ -147,28 +155,25 @@ namespace skyline::gpu::interconnect {
         CommandRecordThread recordThread;
         CommandRecordThread::Slot *slot{};
         ExecutionWaiterThread waiterThread;
-        std::optional<CheckpointPollerThread> checkpointPollerThread;
+        [[maybe_unused]] std::optional<CheckpointPollerThread> checkpointPollerThread;
         node::RenderPassNode *renderPass{};
+
         std::list<node::NodeVariant, LinearAllocator<node::NodeVariant>>::iterator renderPassIt;
-        size_t subpassCount{}; //!< The number of subpasses in the current render pass
+        size_t subpassCount{}; //!< The number of subpasses in the current render pass (TODO: remove)
         u32 renderPassIndex{};
         bool preserveLocked{};
 
         /**
          * @brief A wrapper of a Texture object that has been locked beforehand and must be unlocked afterwards
          */
-        struct LockedTexture {
+        struct LockedTexture : std::enable_shared_from_this<LockedTexture> {
             std::shared_ptr<Texture> texture;
 
             explicit LockedTexture(std::shared_ptr<Texture> texture);
 
             LockedTexture(const LockedTexture &) = delete;
 
-            constexpr LockedTexture(LockedTexture &&other);
-
-            constexpr Texture *operator->() const;
-
-            ~LockedTexture();
+            constexpr LockedTexture(LockedTexture &&other) noexcept;
         };
 
         std::vector<LockedTexture> preserveAttachedTextures;
@@ -184,7 +189,7 @@ namespace skyline::gpu::interconnect {
 
             LockedBuffer(const LockedBuffer &) = delete;
 
-            constexpr LockedBuffer(LockedBuffer &&other);
+            constexpr LockedBuffer(LockedBuffer &&other) noexcept;
 
             constexpr Buffer *operator->() const;
 
@@ -193,11 +198,6 @@ namespace skyline::gpu::interconnect {
 
         std::vector<LockedBuffer> preserveAttachedBuffers;
         std::vector<LockedBuffer> attachedBuffers; //!< All textures that are attached to the current execution
-
-
-        std::vector<vk::ImageView> lastSubpassInputAttachments; //!< The set of input attachments used in the last subpass
-        std::vector<vk::ImageView> lastSubpassColorAttachments; //!< The set of color attachments used in the last subpass
-        vk::ImageView lastSubpassDepthStencilAttachment{}; //!< The depth stencil attachment used in the last subpass
 
         std::vector<std::function<void()>> flushCallbacks; //!< Set of persistent callbacks that will be called at the start of Execute in order to flush data required for recording
         std::vector<std::function<void()>> pipelineChangeCallbacks; //!< Set of persistent callbacks that will be called after any non-Maxwell 3D engine changes the active pipeline
@@ -209,17 +209,12 @@ namespace skyline::gpu::interconnect {
         void RotateRecordSlot();
 
         /**
-         * @brief Create a new render pass and subpass with the specified attachments, if one doesn't already exist or the current one isn't compatible
-         * @param noSubpassCreation Forces creation of a renderpass when a new subpass would otherwise be created
-         * @note This also checks for subpass coalescing and will merge the new subpass with the previous one when possible
-         * @return If the next subpass must be started prior to issuing any commands
+         * @brief Create a new render pass with the specified attachments or reuses the current render pass if compatible
+         * @return If a new render pass was created or not
          */
-        bool CreateRenderPassWithSubpass(vk::Rect2D renderArea, span<TextureView *> sampledImages, span<TextureView *> inputAttachments, span<TextureView *> colorAttachments, TextureView *depthStencilAttachment, bool noSubpassCreation = false, vk::PipelineStageFlags srcStageMask = {}, vk::PipelineStageFlags dstStageMask = {});
+        bool CreateRenderPassWithAttachments(vk::Rect2D renderArea, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, span<HostTextureView *> colorAttachments, TextureSyncRequestArgs colorAttachmentSync, std::pair<HostTextureView *, TextureSyncRequestArgs> depthStencilAttachment, vk::PipelineStageFlags srcStageMask = {}, vk::PipelineStageFlags dstStageMask = {});
 
-        /**
-         * @brief Ends a render pass if one is currently active and resets all corresponding state
-         */
-        void FinishRenderPass();
+        void CreateTransferPass();
 
         /**
          * @brief Execute all the nodes and submit the resulting command buffer to the GPU
@@ -241,12 +236,21 @@ namespace skyline::gpu::interconnect {
 
       public:
         std::shared_ptr<FenceCycle> cycle; //!< The fence cycle that this command executor uses to wait for the GPU to finish executing commands
-        LinearAllocatorState<> *allocator;
+        LinearAllocatorState<> *allocator{};
         ContextTag tag; //!< The tag associated with this command executor, any tagged resource locking must utilize this tag
         size_t submissionNumber{};
         ContextTag executionTag{};
         bool captureNextExecution{};
-        UsageTracker usageTracker;
+        UsageTracker usageTracker{};
+        struct TransferPass {
+            bool active{};
+            bool ignoreCompat{};
+            node::SyncNode *preStagingCopyNode{};
+            std::list<node::NodeVariant, LinearAllocator<node::NodeVariant>>::iterator toStagingIt;
+            node::SyncNode *stagingCopyNode{};
+            std::list<node::NodeVariant, LinearAllocator<node::NodeVariant>>::iterator fromStagingIt;
+            node::SyncNode *postStagingCopyNode{};
+        } transferPass{};
 
         CommandExecutor(const DeviceState &state);
 
@@ -256,9 +260,15 @@ namespace skyline::gpu::interconnect {
          * @brief Attach the lifetime of the texture to the command buffer
          * @return If this is the first usage of the backing of this resource within this execution
          * @note The supplied texture will be locked automatically until the command buffer is submitted and must **not** be locked by the caller
-         * @note This'll automatically handle syncing of the texture in the most optimal way possible
          */
-        bool AttachTexture(TextureView *view);
+        bool AttachTextureView(HostTextureView *view);
+
+        /**
+         * @brief Attach the lifetime of the texture to the command buffer
+         * @return If this is the first usage of the backing of this resource within this execution
+         * @note The supplied texture will be locked automatically until the command buffer is submitted and must **not** be locked by the caller
+         */
+        bool AttachTexture(std::shared_ptr<Texture> texture);
 
         /**
          * @brief Attach the lifetime of a buffer view to the command buffer
@@ -293,45 +303,69 @@ namespace skyline::gpu::interconnect {
          * @brief Adds a command that needs to be executed inside a subpass configured with certain attachments
          * @param exclusiveSubpass If this subpass should be the only subpass in a render pass
          * @note Any supplied texture should be attached prior and not undergo any persistent layout transitions till execution
+         * @note Any texture views may be nullptr, in which case the texture will be ignored
          */
-        void AddSubpass(std::function<void(vk::raii::CommandBuffer &, const std::shared_ptr<FenceCycle> &, GPU &, vk::RenderPass, u32)> &&function, vk::Rect2D renderArea, span<TextureView *> sampledImages, span<TextureView *> inputAttachments = {}, span<TextureView *> colorAttachments = {}, TextureView *depthStencilAttachment = {}, bool noSubpassCreation = false, vk::PipelineStageFlags srcStageMask = {}, vk::PipelineStageFlags dstStageMask = {});
+        void AddSubpass(ExecutorCommand function, vk::Rect2D renderArea, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, span<HostTextureView *> colorAttachments = {}, TextureSyncRequestArgs colorAttachmentSync = {}, std::pair<HostTextureView *, TextureSyncRequestArgs> depthStencilAttachment = {}, vk::PipelineStageFlags srcStageMask = {}, vk::PipelineStageFlags dstStageMask = {});
 
         /**
          * @brief Adds a subpass that clears the entirety of the specified attachment with a color value, it may utilize VK_ATTACHMENT_LOAD_OP_CLEAR for a more efficient clear when possible
          * @note Any supplied texture should be attached prior and not undergo any persistent layout transitions till execution
          */
-        void AddClearColorSubpass(TextureView *attachment, const vk::ClearColorValue &value);
+        void AddClearColorSubpass(vk::Rect2D renderArea, HostTextureView *attachment, const vk::ClearColorValue &value);
 
         /**
          * @brief Adds a subpass that clears the entirety of the specified attachment with a depth/stencil value, it may utilize VK_ATTACHMENT_LOAD_OP_CLEAR for a more efficient clear when possible
          * @note Any supplied texture should be attached prior and not undergo any persistent layout transitions till execution
          */
-        void AddClearDepthStencilSubpass(TextureView *attachment, const vk::ClearDepthStencilValue &value);
+        void AddClearDepthStencilSubpass(vk::Rect2D renderArea, HostTextureView *attachment, const vk::ClearDepthStencilValue &value);
 
         /**
          * @brief Adds a command that needs to be executed outside the scope of a render pass
          */
-        void AddOutsideRpCommand(std::function<void(vk::raii::CommandBuffer &, const std::shared_ptr<FenceCycle> &, GPU &)> &&function);
+        void AddOutsideRpCommand(ExecutorCommand function);
 
         /**
          * @brief Adds a command that can be executed inside or outside of an RP
          */
-        void AddCommand(std::function<void(vk::raii::CommandBuffer &, const std::shared_ptr<FenceCycle> &, GPU &)> &&function);
+        void AddCommand(ExecutorCommand function);
 
         /**
          * @brief Inserts the input command into the node list at the beginning of the execution
          */
-        void InsertPreExecuteCommand(std::function<void(vk::raii::CommandBuffer &, const std::shared_ptr<FenceCycle> &, GPU &)> &&function);
+        void InsertPreExecuteCommand(ExecutorCommand function);
 
         /**
          * @brief Inserts the input command into the node list before the current RP begins (or immediately if not in an RP)
          */
-        void InsertPreRpCommand(std::function<void(vk::raii::CommandBuffer &, const std::shared_ptr<FenceCycle> &, GPU &)> &&function);
+        void InsertPreRpCommand(ExecutorCommand function);
+
+        /**
+         * @brief Inserts the input command into the node list after the beginning of the current RP (or immediately if not in an RP)
+         */
+        void InsertRpBeginCommand(ExecutorCommand function);
 
         /**
          * @brief Inserts the input command into the node list after the current RP (or execution) finishes
          */
-        void InsertPostRpCommand(std::function<void(vk::raii::CommandBuffer &, const std::shared_ptr<FenceCycle> &, GPU &)> &&function);
+        void InsertPostRpCommand(ExecutorCommand function);
+
+        /**
+         * @brief Inserts the input command into the node list right before the current RP (or execution) finishes
+         */
+        void InsertRpEndCommand(ExecutorCommand function);
+
+        /**
+         * @brief Ends a render pass if one is currently active and resets all corresponding state
+         */
+        void FinishRenderPass();
+
+        void AddRPTextureBarrier(HostTexture &toWait, const TextureSyncRequestArgs &args, node::SyncNode *toWaitWith);
+
+        void AddTextureBarrier(HostTexture &toWait, const TextureSyncRequestArgs &args);
+
+        void AddTextureTransferCommand(HostTexture &toWait, const TextureSyncRequestArgs &args, ExecutorCommand function);
+
+        void AddStagedTextureTransferCommand(HostTexture &toWait, const TextureSyncRequestArgs &args, ExecutorCommand preStagingFunction, ExecutorCommand postStagingFunction);
 
         /**
          * @brief Adds a full pipeline barrier to the command buffer
@@ -369,10 +403,11 @@ namespace skyline::gpu::interconnect {
 
         /**
          * @brief Execute all the nodes and submit the resulting command buffer to the GPU
-         * @param callback A function to call upon GPU completion of the submission
+         * @param callback A function to call after command buffer submission
          * @param wait Whether to wait synchronously for GPU completion of the submit
+         * @param destroyTextures Wheter to flush stale textures from the texture manager
          */
-        void Submit(std::function<void()> &&callback = {}, bool wait = false);
+        void Submit(std::function<void()> &&callback = {}, bool wait = false, bool destroyTextures = true);
 
         /**
          * @brief Adds an action to be executed upon current cycle completion (if DMI is on, otherwise after submission)

@@ -106,7 +106,8 @@ namespace skyline::gpu::interconnect {
 
     struct SetTransformFeedbackBufferCmdImpl {
         void Record(GPU &gpu, vk::raii::CommandBuffer &commandBuffer) {
-            commandBuffer.bindTransformFeedbackBuffersEXT(binding, buffer, offset, size);
+            if (gpu.traits.supportsTransformFeedback)
+                commandBuffer.bindTransformFeedbackBuffersEXT(binding, buffer, offset, size);
         }
 
         u32 binding;
