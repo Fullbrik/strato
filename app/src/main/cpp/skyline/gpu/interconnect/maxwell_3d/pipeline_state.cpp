@@ -49,7 +49,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
                 break;
             default:
                 sampleCount = vk::SampleCountFlagBits::e1;
-                Logger::Error("Invalid MSAA mode: {}", static_cast<u32>(msaaMode));
+                LOGE("Invalid MSAA mode: {}", static_cast<u32>(msaaMode));
         }
         return {sampleCount, sampleDimensions};
     }
@@ -100,7 +100,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
 
         texture::Mappings mappings{ctx.channelCtx.asCtx->gmmu.TranslateRange(target.offset, layerStride * layerCount)};
         if (std::none_of(mappings.begin(), mappings.end(), [](const auto &mapping){ return mapping.valid(); })) [[unlikely]] {
-            Logger::Error("Unmapped CT: 0x{:X}", u64{target.offset});
+            LOGE("Unmapped CT: 0x{:X}", u64{target.offset});
             view = {};
             return;
         }
@@ -164,7 +164,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
 
         texture::Mappings mappings{ctx.channelCtx.asCtx->gmmu.TranslateRange(engine->ztOffset, layerStride * layerCount)};
         if (std::none_of(mappings.begin(), mappings.end(), [](const auto &mapping){ return mapping.valid(); })) [[unlikely]] {
-            Logger::Warn("Unmapped ZT: 0x{:X}", u64{engine->ztOffset});
+            LOGW("Unmapped ZT: 0x{:X}", u64{engine->ztOffset});
             view = {};
             return;
         }

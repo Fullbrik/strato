@@ -440,7 +440,7 @@ namespace skyline::gpu::texture {
                 copyTexture.template operator()<u128>();
                 break;
             default:
-                Logger::Error("Invalid format bpb!");
+                LOGE("Invalid format bpb!");
                 break;
         }
     }

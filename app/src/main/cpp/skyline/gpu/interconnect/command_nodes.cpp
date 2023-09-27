@@ -148,7 +148,7 @@ namespace skyline::gpu::interconnect::node {
             if (attachment && attachment->view && attachment->view->texture)
                 addAttachment(*attachment);
             else if (attachment && attachment->view && !attachment->view->texture) {
-                Logger::Error("Destroyed texture at render pass time!");
+                LOGE("Destroyed texture at render pass time!");
                 attachmentReferences.emplace_back(vk::AttachmentReference{
                     .attachment = VK_ATTACHMENT_UNUSED,
                     .layout = vk::ImageLayout::eUndefined,

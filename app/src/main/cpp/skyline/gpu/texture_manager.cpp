@@ -14,7 +14,7 @@
 
 namespace skyline::gpu {
     std::shared_ptr<Texture> TextureManager::CreateTexture(TextureViewRequestInfo &info, bool mutableFormat) {
-        Logger::Info("Texture created: {} tile mode, {} levels, {} layers, 0x{:X} layer stride, mutableFormat: {}", info.tileConfig.mode, info.levelCount, info.layerCount, info.layerStride, mutableFormat);
+        LOGI("Texture created: {} tile mode, {} levels, {} layers, 0x{:X} layer stride, mutableFormat: {}", info.tileConfig.mode, info.levelCount, info.layerCount, info.layerStride, mutableFormat);
 
         auto texture{std::make_shared<Texture>(gpu, info, mutableFormat)};
         texture->SetupGuestMappings();
@@ -246,7 +246,7 @@ namespace skyline::gpu {
     void TextureManager::OnTrim(i32 level) {
         std::unique_lock lock{mutex};
 
-        Logger::WarnNoPrefix("Trim triggered: level: {}", level);
+        LOGWNF("Trim triggered: level: {}", level);
 
         textures.sort([](const auto &texture, const auto &texture2){
             auto maxUsage{[](const std::shared_ptr<Texture> &texture){

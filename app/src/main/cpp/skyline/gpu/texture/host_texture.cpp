@@ -4,7 +4,6 @@
 #include <gpu.h>
 #include <common/trace.h>
 #include "common.h"
-#include "common/logger.h"
 #include "host_texture.h"
 #include "texture.h"
 #include "bc_decoder.h"
@@ -544,7 +543,7 @@ namespace skyline::gpu {
             if (FormatSupportsStorageImage(gpu, *format))
                 usage |= vk::ImageUsageFlagBits::eStorage;
             else
-                Logger::Error("Requested format doesn't support being used as a storage image: {}", vk::to_string(info.viewFormat->vkFormat));
+                LOGE("Requested format doesn't support being used as a storage image: {}", vk::to_string(info.viewFormat->vkFormat));
         }
 
         if ((format->vkAspect & vk::ImageAspectFlagBits::eColor) && !format->IsCompressed())
@@ -579,8 +578,8 @@ namespace skyline::gpu {
         };
         backing = tiling != vk::ImageTiling::eLinear ? gpu.memory.AllocateImage(imageCreateInfo) : gpu.memory.AllocateMappedImage(imageCreateInfo);
 
-        Logger::Info("Variant created: {}x{}x{}, sample count: {}, format: {}, image type: {}, mapped range: 0x{:X} - 0x{:X}, 0x{:X}",
-                     dimensions.width, dimensions.height, dimensions.depth, static_cast<i32>(sampleCount), vk::to_string(guestFormat->vkFormat), vk::to_string(imageType), guest.mappings.front().data(), guest.mappings.front().end().base(), &texture);
+        LOGI("Variant created: {}x{}x{}, sample count: {}, format: {}, image type: {}, mapped range: {} - {}, {}",
+                     dimensions.width, dimensions.height, dimensions.depth, static_cast<i32>(sampleCount), vk::to_string(guestFormat->vkFormat), vk::to_string(imageType), fmt::ptr(guest.mappings.front().data()), fmt::ptr(guest.mappings.front().end().base()), fmt::ptr(&texture));
     }
 
     HostTexture::~HostTexture() {

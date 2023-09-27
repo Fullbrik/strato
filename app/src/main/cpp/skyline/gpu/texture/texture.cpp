@@ -132,7 +132,7 @@ namespace skyline::gpu {
                 return true;
             });
         } else {
-            Logger::Warn("Completely unmapped texture!");
+            LOGW("Completely unmapped texture!");
         }
     }
 

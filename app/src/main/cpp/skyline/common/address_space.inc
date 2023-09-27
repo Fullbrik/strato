@@ -292,7 +292,7 @@ namespace skyline {
         // Reads may span across multiple individual blocks
         while (size) {
             if (predecessor->phys == nullptr) [[unlikely]] {
-                Logger::Warn("Page fault at 0x{:X}", predecessor->virt);
+                LOGW("Page fault at 0x{:X}", predecessor->virt);
             } else {
                 if (predecessor->extraInfo.sparseMapped) { // Sparse mappings read all zeroes
                     std::memset(destination, 0, blockReadSize);
@@ -334,7 +334,7 @@ namespace skyline {
         // Writes may span across multiple individual blocks
         while (size) {
             if (predecessor->phys == nullptr) [[unlikely]] {
-                Logger::Warn("Page fault at 0x{:X}", predecessor->virt);
+                LOGW("Page fault at 0x{:X}", predecessor->virt);
             } else {
                 if (!predecessor->extraInfo.sparseMapped) { // Sparse mappings ignore writes
                     if (cpuAccessCallback)
@@ -385,9 +385,9 @@ namespace skyline {
         // Writes may span across multiple individual blocks
         while (size) {
             if (srcPredecessor->phys == nullptr) [[unlikely]] {
-                Logger::Warn("Page fault at 0x{:X}", srcPredecessor->virt);
+                LOGW("Page fault at 0x{:X}", srcPredecessor->virt);
             } else if (dstPredecessor->phys == nullptr) [[unlikely]] {
-                Logger::Warn("Page fault at 0x{:X}", dstPredecessor->virt);
+                LOGW("Page fault at 0x{:X}", dstPredecessor->virt);
             } else [[likely]] {
                     if (srcPredecessor->extraInfo.sparseMapped) {
                         std::memset(dstBlockPhys, 0, blockCopySize);

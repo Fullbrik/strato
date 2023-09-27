@@ -589,7 +589,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
             .stencilTestEnable = packedState.stencilTestEnable,
         };
         if (packedState.depthBoundsTestEnable && !gpu.traits.supportsDepthBounds) [[unlikely]]
-            Logger::Warn("Depth bounds used on guest without host support");
+            LOGW("Depth bounds used on guest without host support");
 
         std::tie(depthStencilState.front, depthStencilState.back) = packedState.GetStencilOpsState();
 
@@ -607,7 +607,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
         }
 
         if (packedState.logicOpEnable && !gpu.traits.supportsLogicOp) [[unlikely]]
-            Logger::Warn("LogicOp used on guest without host support");
+            LOGW("LogicOp used on guest without host support");
 
         vk::PipelineColorBlendStateCreateInfo colorBlendState{
             .logicOpEnable = packedState.logicOpEnable && gpu.traits.supportsLogicOp,

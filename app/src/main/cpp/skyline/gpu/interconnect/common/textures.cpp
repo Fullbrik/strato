@@ -192,7 +192,7 @@ namespace skyline::gpu::interconnect {
                 case TextureImageControl::ImageSwizzle::OneInt:
                     return vk::ComponentSwizzle::eOne;
                 default:
-                    Logger::Error("Invalid swizzle: {:X}", static_cast<u32>(swizzle));
+                    LOGE("Invalid swizzle: {:X}", static_cast<u32>(swizzle));
                     return vk::ComponentSwizzle::eZero;
             }
         }};
@@ -253,7 +253,7 @@ namespace skyline::gpu::interconnect {
                         format = format::R32G32B32A32Uint;
                         break;
                     [[unlikely]] default:
-                        Logger::Error("Invalid storage image format: 0x{:X}", static_cast<u32>(overrideFormat));
+                        LOGE("Invalid storage image format: 0x{:X}", static_cast<u32>(overrideFormat));
                 }
             } else {
                 format = ConvertTicFormat(textureHeader.formatWord, textureHeader.srgbConversion);
@@ -270,7 +270,7 @@ namespace skyline::gpu::interconnect {
             switch (textureHeader.headerType) {
                 case TextureImageControl::HeaderType::BlockLinear:
                     if (textureHeader.lowAddress.gobDepthOffset != 0)
-                        Logger::Warn("Gob Depth offsets are not supported! (0x{:X})", static_cast<u8>(textureHeader.lowAddress.gobDepthOffset));
+                        LOGW("Gob Depth offsets are not supported! (0x{:X})", static_cast<u8>(textureHeader.lowAddress.gobDepthOffset));
 
                     tileConfig = {
                         .mode = texture::TileMode::Block,
@@ -286,7 +286,7 @@ namespace skyline::gpu::interconnect {
                     };
                     break;
                 [[unlikely]] default:
-                    Logger::Error("Unsupported or invalid TIC header type 0x{:X}!", static_cast<u32>(textureHeader.headerType));
+                    LOGE("Unsupported or invalid TIC header type 0x{:X}!", static_cast<u32>(textureHeader.headerType));
                     return nullptr;
             }
 
@@ -330,7 +330,7 @@ namespace skyline::gpu::interconnect {
                     layerCount = (textureHeader.depthMinusOne + 1) * CubeFaceCount;
                     break;
                 [[unlikely]] default:
-                    Logger::Error("Invalid TIC texture type: 0x{:X}", static_cast<u32>(textureHeader.textureType));
+                    LOGE("Invalid TIC texture type: 0x{:X}", static_cast<u32>(textureHeader.textureType));
                     return nullptr;
             }
 
@@ -373,7 +373,7 @@ namespace skyline::gpu::interconnect {
             u32 layerStride{texture::CalculateLayerStride(sampleDimensions, format, tileConfig, levelCount, layerCount)};
             texture::Mappings mappings{ctx.channelCtx.asCtx->gmmu.TranslateRange(textureHeader.Iova(), layerStride * layerCount)};
             if (mappings.empty() || std::none_of(mappings.begin(), mappings.end(), [](const auto &mapping) { return mapping.valid(); })) [[unlikely]] {
-                Logger::Warn("Unmapped texture in TIC pool: 0x{:X}", textureHeader.Iova());
+                LOGW("Unmapped texture in TIC pool: 0x{:X}", textureHeader.Iova());
                 return nullptr;
             }
 
@@ -427,7 +427,7 @@ namespace skyline::gpu::interconnect {
             case TextureImageControl::TextureType::eCubeArray:
                 return Shader::TextureType::ColorArrayCube;
             [[unlikely]] default:
-                Logger::Error("Invalid texture type: 0x{:X}", static_cast<u32>(textureHeaders[index].textureType));
+                LOGE("Invalid texture type: 0x{:X}", static_cast<u32>(textureHeaders[index].textureType));
                 return {};
         }
     }

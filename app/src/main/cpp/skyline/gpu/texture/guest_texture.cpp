@@ -157,7 +157,7 @@ namespace skyline::gpu {
                 return std::nullopt; // The texture has incompatible dimensions
         } else {
             if (levelCount != 1) [[unlikely]]
-                Logger::Error("Mipmapped pitch textures are not supported! levelCount: {}", levelCount);
+                LOGE("Mipmapped pitch textures are not supported! levelCount: {}", levelCount);
 
             if (util::AlignUp(mipLayouts[level].dimensions.width, 64) != util::AlignUp(pTextureSizes.width, 64) || mipLayouts[0].dimensions.height != pTextureSizes.height)
                 return std::nullopt; // The texture has incompatible dimensions
@@ -183,23 +183,23 @@ namespace skyline::gpu {
         u32 offset{OffsetFrom(other.mappings)}, otherOffset{other.OffsetFrom(mappings)};
 
         if (tileConfig.mode != other.tileConfig.mode) [[unlikely]] {
-            Logger::Warn("Overlaps of different tile modes are not supported!");
+            LOGW("Overlaps of different tile modes are not supported!");
             return std::nullopt;
         }
 
         if (format->IsCompressed()) {
-            Logger::Warn("Src format is compressed (not supported)");
+            LOGW("Src format is compressed (not supported)");
             return std::nullopt;
         } else if (format->vkAspect == (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)) {
-            Logger::Warn("Src format is depth stencil (not implemented)");
+            LOGW("Src format is depth stencil (not implemented)");
             return std::nullopt;
         }
 
         if (otherFormat->IsCompressed()) {
-            Logger::Warn("Dst format is compressed (not supported)");
+            LOGW("Dst format is compressed (not supported)");
             return std::nullopt;
         } else if (otherFormat->vkAspect == (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)) {
-            Logger::Warn("Dst format is depth stencil (not implemented)");
+            LOGW("Dst format is depth stencil (not implemented)");
             return std::nullopt;
         }
 
@@ -236,8 +236,8 @@ namespace skyline::gpu {
             layer = thisOffset / layerStride;
 
         if (tileConfig.mode == texture::TileMode::Block) {
-            Logger::Verbose("Src: {}x{}x{} format: {}, levels: {}, layers: {}, address: 0x{:X}-0x{:X}, blockHeight: {}, blockDepth: {}", other.mipLayouts[0].dimensions.width / otherFormat->bpb, other.mipLayouts[0].dimensions.height, other.mipLayouts[0].dimensions.depth, vk::to_string(otherFormat->vkFormat), other.levelCount, other.layerCount, other.mappings.front().data(), other.mappings.front().end().base(), other.mipLayouts[0].blockHeight, other.mipLayouts[0].blockDepth);
-            Logger::Verbose("Dst: {}x{}x{} format: {}, levels: {}, layers: {}, address: 0x{:X}-0x{:X}, blockHeight: {}, blockDepth: {}", mipLayouts[0].dimensions.width / format->bpb, mipLayouts[0].dimensions.height, mipLayouts[0].dimensions.depth, vk::to_string(format->vkFormat), levelCount, layerCount, mappings.front().data(), mappings.front().end().base(), mipLayouts[0].blockHeight, mipLayouts[0].blockDepth);
+            LOGV("Src: {}x{}x{} format: {}, levels: {}, layers: {}, address: 0x{}-0x{}, blockHeight: {}, blockDepth: {}", other.mipLayouts[0].dimensions.width / otherFormat->bpb, other.mipLayouts[0].dimensions.height, other.mipLayouts[0].dimensions.depth, vk::to_string(otherFormat->vkFormat), other.levelCount, other.layerCount, fmt::ptr(other.mappings.front().data()), fmt::ptr(other.mappings.front().end().base()), other.mipLayouts[0].blockHeight, other.mipLayouts[0].blockDepth);
+            LOGV("Dst: {}x{}x{} format: {}, levels: {}, layers: {}, address: 0x{}-0x{}, blockHeight: {}, blockDepth: {}", mipLayouts[0].dimensions.width / format->bpb, mipLayouts[0].dimensions.height, mipLayouts[0].dimensions.depth, vk::to_string(format->vkFormat), levelCount, layerCount, fmt::ptr(mappings.front().data()), fmt::ptr(mappings.front().end().base()), mipLayouts[0].blockHeight, mipLayouts[0].blockDepth);
 
             ///!< FIXME: Figure out a more optimised (and less ugly) approach to this
             u32 inMipOffset{};
@@ -439,9 +439,9 @@ namespace skyline::gpu {
 
             return {std::move(results)};
         } else {
-            Logger::Warn("Src: {}x{}x{} format: {}, levels: {}, layers: {}, address: 0x{:X}-0x{:X}, pitch: {}", other.mipLayouts[0].dimensions.width / otherFormat->bpb, other.mipLayouts[0].dimensions.height, other.mipLayouts[0].dimensions.depth, vk::to_string(otherFormat->vkFormat), other.levelCount, other.layerCount, other.mappings.front().data(), other.mappings.front().end().base(), other.tileConfig.pitch);
-            Logger::Warn("Dst: {}x{}x{} format: {}, levels: {}, layers: {}, address: 0x{:X}-0x{:X}, pitch: {}", mipLayouts[0].dimensions.width / format->bpb, mipLayouts[0].dimensions.height, mipLayouts[0].dimensions.depth, vk::to_string(format->vkFormat), levelCount, layerCount, mappings.front().data(), mappings.front().end().base(), tileConfig.pitch);
-            Logger::Warn("Pitch overlaps are not implemented");
+            LOGW("Src: {}x{}x{} format: {}, levels: {}, layers: {}, address: {}-{}, pitch: {}", other.mipLayouts[0].dimensions.width / otherFormat->bpb, other.mipLayouts[0].dimensions.height, other.mipLayouts[0].dimensions.depth, vk::to_string(otherFormat->vkFormat), other.levelCount, other.layerCount, fmt::ptr(other.mappings.front().data()), fmt::ptr(other.mappings.front().end().base()), other.tileConfig.pitch);
+            LOGW("Dst: {}x{}x{} format: {}, levels: {}, layers: {}, address: {}-{}, pitch: {}", mipLayouts[0].dimensions.width / format->bpb, mipLayouts[0].dimensions.height, mipLayouts[0].dimensions.depth, vk::to_string(format->vkFormat), levelCount, layerCount, fmt::ptr(mappings.front().data()), fmt::ptr(mappings.front().end().base()), tileConfig.pitch);
+            LOGW("Pitch overlaps are not implemented");
             return std::nullopt;
         }
     }

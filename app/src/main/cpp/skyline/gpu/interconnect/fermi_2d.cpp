@@ -155,7 +155,7 @@ namespace skyline::gpu::interconnect {
             .viewAspect = dstFermiTexture.format->vkAspect
         })};
 
-        Logger::Debug("{}x{}x{}@0x{:X} -> {}x{}x{}@0x{:X}", srcFermiTexture.dimensions.width, srcFermiTexture.dimensions.height, srcFermiTexture.dimensions.depth, u64{srcSurface.address}, dstFermiTexture.dimensions.width, dstFermiTexture.dimensions.height, dstFermiTexture.dimensions.depth, u64{dstSurface.address});
+        LOGD("{}x{}x{}@0x{:X} -> {}x{}x{}@0x{:X}", srcFermiTexture.dimensions.width, srcFermiTexture.dimensions.height, srcFermiTexture.dimensions.depth, u64{srcSurface.address}, dstFermiTexture.dimensions.width, dstFermiTexture.dimensions.height, dstFermiTexture.dimensions.depth, u64{dstSurface.address});
 
         executor.AddCheckpoint("Before blit");
         gpu.helperShaders.blitHelperShader.Blit(
