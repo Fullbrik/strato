@@ -143,8 +143,8 @@ function(target_link_libraries_system target)
     endforeach (library)
 endfunction(target_link_libraries_system)
 
-set(CMAKE_CXX_FLAGS_DEBUG "-Ofast -flto=full -fno-stack-protector -DNDEBUG")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Ofast -flto=full -fno-stack-protector -DNDEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -glldb -gdwarf-5 -fno-omit-frame-pointer -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O1 -g3 -glldb -gdwarf-5 -fno-omit-frame-pointer -fno-stack-protector -DNDEBUG")
 # yuzu Shader Compiler
 add_subdirectory("libraries/shader-compiler")
 target_include_directories(shader_recompiler PUBLIC "libraries/shader-compiler/include")

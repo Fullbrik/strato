@@ -87,7 +87,7 @@ namespace skyline::gpu::memory {
         ThrowOnFail(vmaFindMemoryTypeIndexForBufferInfo(vmaAllocator,&static_cast<const VkBufferCreateInfo &>(sampleBufCreateInfo), &sampleAllocCreateInfo, &memTypeIndex));
 
         VmaPoolCreateInfo poolCreateInfo = {
-            .blockSize = 128 * 1024 * 1024, // Allocate in 128 MB chunks
+            .blockSize = 64 * 1024 * 1024, // Allocate in 64 MB chunks
             .minBlockCount = 1,
             .memoryTypeIndex = memTypeIndex,
             .minAllocationAlignment = 64

@@ -50,20 +50,20 @@ namespace skyline::gpu {
                     result.toStaging.push_back(vk::BufferImageCopy{
                         .imageSubresource = {
                             .layerCount = std::min(layerCount, other.layerCount),
-                            .aspectMask = format->Aspect({vk::ComponentSwizzle::eR}),
-                            .mipLevel = level
-                        },
-                        .bufferOffset = result.stagingBufferSize,
-                        .imageExtent = format->GetDimensionsFromBytes(minDim)
-                    });
-                    result.fromStaging.push_back(vk::BufferImageCopy{
-                        .imageSubresource = {
-                            .layerCount = std::min(layerCount, other.layerCount),
-                            .aspectMask = otherFormat->Aspect({vk::ComponentSwizzle::eR}),
+                            .aspectMask = otherFormat->vkAspect,
                             .mipLevel = level
                         },
                         .bufferOffset = result.stagingBufferSize,
                         .imageExtent = otherFormat->GetDimensionsFromBytes(minDim)
+                    });
+                    result.fromStaging.push_back(vk::BufferImageCopy{
+                        .imageSubresource = {
+                            .layerCount = std::min(layerCount, other.layerCount),
+                            .aspectMask = format->vkAspect,
+                            .mipLevel = level
+                        },
+                        .bufferOffset = result.stagingBufferSize,
+                        .imageExtent = format->GetDimensionsFromBytes(minDim)
                     });
                     result.stagingBufferSize += minDim.width * minDim.height * minDim.depth;
                     ++level;
@@ -85,20 +85,20 @@ namespace skyline::gpu {
                     result.toStaging.push_back(vk::BufferImageCopy{
                         .imageSubresource = {
                             .layerCount = 1,
-                            .aspectMask = format->Aspect({vk::ComponentSwizzle::eR}),
-                            .mipLevel = level
-                        },
-                        .bufferOffset = result.stagingBufferSize,
-                        .imageExtent = format->GetDimensionsFromBytes(minDim)
-                    });
-                    result.fromStaging.push_back(vk::BufferImageCopy{
-                        .imageSubresource = {
-                            .layerCount = 1,
-                            .aspectMask = otherFormat->Aspect({vk::ComponentSwizzle::eR}),
+                            .aspectMask = otherFormat->vkAspect,
                             .mipLevel = level
                         },
                         .bufferOffset = result.stagingBufferSize,
                         .imageExtent = otherFormat->GetDimensionsFromBytes(minDim)
+                    });
+                    result.fromStaging.push_back(vk::BufferImageCopy{
+                        .imageSubresource = {
+                            .layerCount = 1,
+                            .aspectMask = format->vkAspect,
+                            .mipLevel = level
+                        },
+                        .bufferOffset = result.stagingBufferSize,
+                        .imageExtent = format->GetDimensionsFromBytes(minDim)
                     });
                     result.stagingBufferSize += minDim.width * minDim.height * minDim.depth;
                 }
@@ -187,19 +187,11 @@ namespace skyline::gpu {
             return std::nullopt;
         }
 
-        if (format->IsCompressed()) {
-            LOGW("Src format is compressed (not supported)");
+        if (format->IsCompressed() || otherFormat->IsCompressed()) [[unlikely]] {
+            LOGW("Overlaps of compressed textures are not supported");
             return std::nullopt;
-        } else if (format->vkAspect == (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)) {
-            LOGW("Src format is depth stencil (not implemented)");
-            return std::nullopt;
-        }
-
-        if (otherFormat->IsCompressed()) {
-            LOGW("Dst format is compressed (not supported)");
-            return std::nullopt;
-        } else if (otherFormat->vkAspect == (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)) {
-            LOGW("Dst format is depth stencil (not implemented)");
+        } else if ((format->vkAspect == (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)) || (otherFormat->vkAspect == (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil))) {
+            LOGW("Overlaps of depth stencil textures are unimplemented");
             return std::nullopt;
         }
 
@@ -222,8 +214,8 @@ namespace skyline::gpu {
     }
 
     std::optional<texture::TextureCopies> GuestTexture::CalculateReinterpretCopy(GuestTexture &other, texture::Format format, texture::Format otherFormat) {
-        u32 thisOffset{OffsetFrom(other.mappings)}, otherOffsetFromThis{other.OffsetFrom(mappings)};
-        bool flip{thisOffset == UINT32_MAX};
+        u32 dstOffset{OffsetFrom(other.mappings)}, srcOffset{other.OffsetFrom(mappings)};
+        bool flip{dstOffset == UINT32_MAX}; //!< If true then the start of the src/other texture is before the dst/this texture. Otherwise it's false
 
         texture::TextureCopies results{};
 
@@ -231,9 +223,9 @@ namespace skyline::gpu {
         u32 otherLayer{}, otherLevel{};
 
         if (flip)
-            otherLayer = otherOffsetFromThis / other.layerStride;
+            layer = srcOffset / layerStride;
         else
-            layer = thisOffset / layerStride;
+            otherLayer = dstOffset / other.layerStride;
 
         if (tileConfig.mode == texture::TileMode::Block) {
             LOGV("Src: {}x{}x{} format: {}, levels: {}, layers: {}, address: 0x{}-0x{}, blockHeight: {}, blockDepth: {}", other.mipLayouts[0].dimensions.width / otherFormat->bpb, other.mipLayouts[0].dimensions.height, other.mipLayouts[0].dimensions.depth, vk::to_string(otherFormat->vkFormat), other.levelCount, other.layerCount, fmt::ptr(other.mappings.front().data()), fmt::ptr(other.mappings.front().end().base()), other.mipLayouts[0].blockHeight, other.mipLayouts[0].blockDepth);
@@ -242,28 +234,28 @@ namespace skyline::gpu {
             ///!< FIXME: Figure out a more optimised (and less ugly) approach to this
             u32 inMipOffset{};
             if (flip) {
-                u32 layerOffset{otherLayer * other.layerStride}, levelOffset{};
-
-                while (otherLevel < other.levelCount && (layerOffset + levelOffset) < otherOffsetFromThis) {
-                    ++otherLevel;
-                    levelOffset += other.mipLayouts[otherLevel].blockLinearSize;
-                }
-
-                if ((otherOffsetFromThis - layerOffset) != levelOffset) {
-                    inMipOffset = static_cast<u32>(other.mipLayouts[otherLevel].blockLinearSize) - ((layerOffset + levelOffset) - otherOffsetFromThis);
-                    --otherLevel;
-                }
-            } else {
                 u32 layerOffset{layer * layerStride}, levelOffset{};
 
-                while (level < levelCount && (layerOffset + levelOffset) < thisOffset) {
+                while (level < levelCount && (layerOffset + levelOffset) < srcOffset) {
                     ++level;
                     levelOffset += mipLayouts[level].blockLinearSize;
                 }
 
-                if ((thisOffset - layerOffset) != levelOffset) {
-                    inMipOffset = static_cast<u32>(mipLayouts[level].blockLinearSize) - ((layerOffset + levelOffset) - thisOffset);
+                if ((srcOffset - layerOffset) != levelOffset) {
+                    inMipOffset = static_cast<u32>(mipLayouts[level].blockLinearSize) - ((layerOffset + levelOffset) - srcOffset);
                     --level;
+                }
+            } else {
+                u32 layerOffset{otherLayer * other.layerStride}, levelOffset{};
+
+                while (otherLevel < other.levelCount && (layerOffset + levelOffset) < dstOffset) {
+                    ++otherLevel;
+                    levelOffset += other.mipLayouts[otherLevel].blockLinearSize;
+                }
+
+                if ((dstOffset - layerOffset) != levelOffset) {
+                    inMipOffset = static_cast<u32>(other.mipLayouts[otherLevel].blockLinearSize) - ((layerOffset + levelOffset) - dstOffset);
+                    --otherLevel;
                 }
             }
 
@@ -271,21 +263,18 @@ namespace skyline::gpu {
             u32 sliceSize, blockSize;
             u32 currentGob{}, currentSlice{}, currentBlock{}, currentRob{}, currentMob{};
             u32 robWidthBlocks, alignedRobWidthBlocks, robCount, mobCount;
-            u32 blockCount;
-            u32 offsetInBlocks, offsetInSlices, offsetInGobs;
             vk::Offset3D imageOffset{};
             vk::Extent3D gobExtent{64U / format->bpb, 8, 1};
 
             u32 otherSliceSize, otherBlockSize;
             u32 otherCurrentGob{}, otherCurrentSlice{}, otherCurrentBlock{}, otherCurrentRob{}, otherCurrentMob{};
             u32 otherRobWidthBlocks, otherAlignedRobWidthBlocks, otherRobCount, otherMobCount;
-            u32 otherBlockCount;
             vk::Offset3D otherImageOffset{};
             vk::Extent3D otherGobExtent{64U / otherFormat->bpb, 8, 1};
 
             for (; layer < layerCount && otherLayer < other.layerCount;) {
                 for (; level < levelCount && otherLevel < other.levelCount;) {
-                    vk::Extent3D imageExtent{mipLayouts[level].dimensions.width / format->bpb, mipLayouts[level].dimensions.height, 1};
+                    vk::Extent3D imageExtent{mipLayouts[level].dimensions.width / format->bpb, mipLayouts[level].dimensions.height, mipLayouts[level].dimensions.depth};
 
                     sliceSize = 64U * 8U * static_cast<u32>(mipLayouts[level].blockHeight);
                     blockSize = sliceSize * static_cast<u32>(mipLayouts[level].blockDepth);
@@ -295,9 +284,7 @@ namespace skyline::gpu {
                     robCount = util::DivideCeil(mipLayouts[level].dimensions.height, 8U * static_cast<u32>(mipLayouts[level].blockHeight));
                     mobCount = util::DivideCeil(mipLayouts[level].dimensions.depth, static_cast<u32>(mipLayouts[level].blockDepth));
 
-                    blockCount = robWidthBlocks * robCount * mobCount;
-
-                    vk::Extent3D otherImageExtent{other.mipLayouts[otherLevel].dimensions.width / format->bpb, other.mipLayouts[otherLevel].dimensions.height, 1};
+                    vk::Extent3D otherImageExtent{other.mipLayouts[otherLevel].dimensions.width / otherFormat->bpb, other.mipLayouts[otherLevel].dimensions.height, other.mipLayouts[otherLevel].dimensions.depth};
 
                     otherSliceSize = 64U * 8U * static_cast<u32>(other.mipLayouts[otherLevel].blockHeight);
                     otherBlockSize = otherSliceSize * static_cast<u32>(other.mipLayouts[otherLevel].blockDepth);
@@ -307,25 +294,56 @@ namespace skyline::gpu {
                     otherRobCount = util::DivideCeil(other.mipLayouts[otherLevel].dimensions.height, 8U * static_cast<u32>(other.mipLayouts[otherLevel].blockHeight));
                     otherMobCount = util::DivideCeil(other.mipLayouts[otherLevel].dimensions.depth, static_cast<u32>(other.mipLayouts[otherLevel].blockDepth));
 
-                    otherBlockCount = otherRobWidthBlocks * otherRobCount * otherMobCount;
+                    if (inMipOffset) {
+                        if (flip) {
+                            currentMob = inMipOffset / (blockSize * alignedRobWidthBlocks * robCount);
+                            inMipOffset = inMipOffset % (blockSize * alignedRobWidthBlocks * robCount);
 
-                    //if (inMipOffset) {
-                    //    currentMob = inMipOffset / (blockSize * alignedRobWidthBlocks * robCount);
-                    //    currentRob = (inMipOffset / (blockSize * alignedRobWidthBlocks)) % robCount * alignedRobWidthBlocks;
-                    //    offsetInBlocks = inMipOffset / blockSize;
-                    //    offsetInSlices = (inMipOffset % blockSize) / sliceSize;
-//
-                    //    inMipOffset = 0;
-                    //}
+                            currentRob = inMipOffset / (blockSize * alignedRobWidthBlocks);
+                            inMipOffset = inMipOffset % (blockSize * alignedRobWidthBlocks);
+
+                            currentBlock = inMipOffset / blockSize;
+                            inMipOffset = inMipOffset % blockSize;
+
+                            currentSlice = inMipOffset / sliceSize;
+                            inMipOffset = inMipOffset % sliceSize;
+
+                            currentGob = inMipOffset / (64U * 8U);
+
+                            imageOffset.x = static_cast<i32>(currentBlock * gobExtent.width);
+                            imageOffset.y = static_cast<i32>((currentRob * mipLayouts[level].blockHeight) + (currentGob * 8U));
+                            imageOffset.z = static_cast<i32>((currentMob * mipLayouts[level].blockDepth) + currentSlice);
+                        } else {
+                            otherCurrentMob = inMipOffset / (otherBlockSize * otherAlignedRobWidthBlocks * otherRobCount);
+                            inMipOffset = inMipOffset % (otherBlockSize * otherAlignedRobWidthBlocks * otherRobCount);
+
+                            otherCurrentRob = inMipOffset / (otherBlockSize * otherAlignedRobWidthBlocks);
+                            inMipOffset = inMipOffset % (otherBlockSize * otherAlignedRobWidthBlocks);
+
+                            otherCurrentBlock = inMipOffset / otherBlockSize;
+                            inMipOffset = inMipOffset % otherBlockSize;
+
+                            otherCurrentSlice = inMipOffset / otherSliceSize;
+                            inMipOffset = inMipOffset % otherSliceSize;
+
+                            otherCurrentGob = inMipOffset / (64U * 8U);
+
+                            otherImageOffset.x = static_cast<i32>(otherCurrentBlock * otherGobExtent.width);
+                            otherImageOffset.y = static_cast<i32>((otherCurrentRob * other.mipLayouts[otherLevel].blockHeight) + (otherCurrentGob * 8U));
+                            otherImageOffset.z = static_cast<i32>((otherCurrentMob * other.mipLayouts[otherLevel].blockDepth) + otherSliceSize);
+                        }
+
+                        inMipOffset = 0;
+                    }
 
                     for (; currentMob < mobCount && otherCurrentMob < otherMobCount; ) {
                         for (; currentRob < robCount && otherCurrentRob < otherRobCount; ) {
                             for (; currentBlock < alignedRobWidthBlocks && otherCurrentBlock < otherAlignedRobWidthBlocks; ) {
                                 for (; currentSlice < mipLayouts[level].blockDepth && otherCurrentSlice < other.mipLayouts[otherLevel].blockDepth;) {
                                     for (; currentGob < mipLayouts[level].blockHeight && otherCurrentGob < other.mipLayouts[otherLevel].blockHeight; ++currentGob, imageOffset.y += 8, ++otherCurrentGob, otherImageOffset.y += 8) {
-                                        if (currentBlock < robWidthBlocks && otherCurrentBlock < otherRobWidthBlocks && imageOffset.x < mipLayouts[level].dimensions.width && otherImageOffset.x < other.mipLayouts[otherLevel].dimensions.width) {
-                                            if (imageOffset.y < mipLayouts[level].dimensions.height && otherImageOffset.y < other.mipLayouts[otherLevel].dimensions.height) {
-                                                if (imageOffset.z < mipLayouts[level].dimensions.depth && otherImageOffset.z < other.mipLayouts[otherLevel].dimensions.depth) {
+                                        if (currentBlock < robWidthBlocks && otherCurrentBlock < otherRobWidthBlocks && imageOffset.x < imageExtent.width && otherImageOffset.x < otherImageExtent.width) {
+                                            if (imageOffset.y < imageExtent.height && otherImageOffset.y < otherImageExtent.height) {
+                                                if (imageOffset.z < imageExtent.depth && otherImageOffset.z < otherImageExtent.depth) {
                                                     results.toStaging.emplace_back(vk::BufferImageCopy{
                                                         .imageSubresource = {
                                                             .aspectMask = otherFormat->vkAspect,
@@ -352,6 +370,10 @@ namespace skyline::gpu {
                                                         .bufferOffset = results.stagingBufferSize,
                                                         .imageOffset = imageOffset
                                                     });
+
+                                                    if (results.toStaging.back().imageExtent.width == 0) {
+                                                        LOGE("Stuff broke");
+                                                    }
 
                                                     results.stagingBufferSize += 64 * 8;
                                                 }
@@ -439,8 +461,8 @@ namespace skyline::gpu {
 
             return {std::move(results)};
         } else {
-            LOGW("Src: {}x{}x{} format: {}, levels: {}, layers: {}, address: {}-{}, pitch: {}", other.mipLayouts[0].dimensions.width / otherFormat->bpb, other.mipLayouts[0].dimensions.height, other.mipLayouts[0].dimensions.depth, vk::to_string(otherFormat->vkFormat), other.levelCount, other.layerCount, fmt::ptr(other.mappings.front().data()), fmt::ptr(other.mappings.front().end().base()), other.tileConfig.pitch);
-            LOGW("Dst: {}x{}x{} format: {}, levels: {}, layers: {}, address: {}-{}, pitch: {}", mipLayouts[0].dimensions.width / format->bpb, mipLayouts[0].dimensions.height, mipLayouts[0].dimensions.depth, vk::to_string(format->vkFormat), levelCount, layerCount, fmt::ptr(mappings.front().data()), fmt::ptr(mappings.front().end().base()), tileConfig.pitch);
+            LOGV("Src: {}x{}x{} format: {}, levels: {}, layers: {}, address: {}-{}, pitch: {}", other.mipLayouts[0].dimensions.width / otherFormat->bpb, other.mipLayouts[0].dimensions.height, other.mipLayouts[0].dimensions.depth, vk::to_string(otherFormat->vkFormat), other.levelCount, other.layerCount, fmt::ptr(other.mappings.front().data()), fmt::ptr(other.mappings.front().end().base()), other.tileConfig.pitch);
+            LOGV("Dst: {}x{}x{} format: {}, levels: {}, layers: {}, address: {}-{}, pitch: {}", mipLayouts[0].dimensions.width / format->bpb, mipLayouts[0].dimensions.height, mipLayouts[0].dimensions.depth, vk::to_string(format->vkFormat), levelCount, layerCount, fmt::ptr(mappings.front().data()), fmt::ptr(mappings.front().end().base()), tileConfig.pitch);
             LOGW("Pitch overlaps are not implemented");
             return std::nullopt;
         }

@@ -14,7 +14,7 @@
 
 namespace skyline::gpu {
     constexpr bool FormatSupportsStorageImage(gpu::GPU &gpu, vk::Format format) {
-        auto &physicalDevice{gpu.vkPhysicalDevice};
+        const auto &physicalDevice{gpu.vkPhysicalDevice};
         auto formatPropereties{physicalDevice.getFormatProperties(format)};
 
         return static_cast<bool>(formatPropereties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eStorageImage);
@@ -578,7 +578,7 @@ namespace skyline::gpu {
         };
         backing = tiling != vk::ImageTiling::eLinear ? gpu.memory.AllocateImage(imageCreateInfo) : gpu.memory.AllocateMappedImage(imageCreateInfo);
 
-        LOGI("Variant created: {}x{}x{}, sample count: {}, format: {}, image type: {}, mapped range: {} - {}, {}",
+        LOGD("Variant created: {}x{}x{}, sample count: {}, format: {}, image type: {}, mapped range: {} - {}, {}",
                      dimensions.width, dimensions.height, dimensions.depth, static_cast<i32>(sampleCount), vk::to_string(guestFormat->vkFormat), vk::to_string(imageType), fmt::ptr(guest.mappings.front().data()), fmt::ptr(guest.mappings.front().end().base()), fmt::ptr(&texture));
     }
 

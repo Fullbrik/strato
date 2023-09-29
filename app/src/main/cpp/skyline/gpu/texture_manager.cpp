@@ -14,7 +14,7 @@
 
 namespace skyline::gpu {
     std::shared_ptr<Texture> TextureManager::CreateTexture(TextureViewRequestInfo &info, bool mutableFormat) {
-        LOGI("Texture created: {} tile mode, {} levels, {} layers, 0x{:X} layer stride, mutableFormat: {}", info.tileConfig.mode, info.levelCount, info.layerCount, info.layerStride, mutableFormat);
+        LOGD("Texture created: {} tile mode, {} levels, {} layers, 0x{:X} layer stride, mutableFormat: {}", info.tileConfig.mode, info.levelCount, info.layerCount, info.layerStride, mutableFormat);
 
         auto texture{std::make_shared<Texture>(gpu, info, mutableFormat)};
         texture->SetupGuestMappings();

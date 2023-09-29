@@ -30,7 +30,8 @@ namespace skyline::gpu {
           presentationTrack{static_cast<u64>(trace::TrackIds::Presentation), perfetto::ProcessTrack::Current()},
           vsyncEvent{std::make_shared<kernel::type::KEvent>(state, true)},
           choreographerThread{&PresentationEngine::ChoreographerThread, this},
-          presentationThread{&PresentationEngine::PresentationThread, this} {
+          presentationThread{&PresentationEngine::PresentationThread, this},
+          vkSwapchain{VK_NULL_HANDLE} {
         auto desc{presentationTrack.Serialize()};
         desc.set_name("Presentation");
         perfetto::TrackEvent::SetTrackDescriptor(presentationTrack, desc);
@@ -133,18 +134,17 @@ namespace skyline::gpu {
                 .layerCount = 1
             };
 
-            auto &dimensions{swapchainExtent};
             if (textureView->format != swapchainFormat) {
                 commandBuffer.blitImage(texture->GetImage(), texture->GetLayout(), image.vkImage, image.layout, vk::ImageBlit{
                     .srcSubresource = srcSubresourceLayers,
                     .srcOffsets = std::array<vk::Offset3D, 2>{
                         vk::Offset3D{0, 0, 0},
-                        vk::Offset3D{dimensions}
+                        vk::Offset3D{static_cast<i32>(swapchainExtent.width), static_cast<i32>(swapchainExtent.height), static_cast<i32>(swapchainExtent.depth)}
                     },
                     .dstSubresource = dstSubresourceLayers,
                     .dstOffsets = std::array<vk::Offset3D, 2>{
                         vk::Offset3D{0, 0, 0},
-                        vk::Offset3D{dimensions}
+                        vk::Offset3D{static_cast<i32>(swapchainExtent.width), static_cast<i32>(swapchainExtent.height), static_cast<i32>(swapchainExtent.depth)}
                     }
                 }, vk::Filter::eNearest);
             } else {
@@ -153,7 +153,7 @@ namespace skyline::gpu {
                     .srcOffset = vk::Offset3D{0, 0, 0},
                     .dstSubresource = dstSubresourceLayers,
                     .dstOffset = vk::Offset3D{0, 0, 0},
-                    .extent = dimensions
+                    .extent = swapchainExtent
                 });
             }
 
@@ -200,9 +200,6 @@ namespace skyline::gpu {
         auto &currentSlot{semaphorePool.at(semaphoreIndex)};
         semaphoreIndex = (semaphoreIndex + 1) % semaphorePool.size(); // Increment the semaphore index and wrap around if it exceeds the pool size
 
-        for (auto &slot : semaphorePool)
-            slot.WaitTillAvailable();
-
         std::pair<vk::Result, u32> vkNextImage;
         while (vkNextImage = vkSwapchain->acquireNextImage(std::numeric_limits<u64>::max(), *currentSlot.semaphore, {}), vkNextImage.first != vk::Result::eSuccess) [[unlikely]] {
             if (vkNextImage.first == vk::Result::eSuboptimalKHR)
@@ -213,6 +210,8 @@ namespace skyline::gpu {
 
         auto &swapchainImage{images.at(vkNextImage.second)};
         currentSlot.freeCycle = CopyIntoSwapchain(textureView, swapchainImage, *currentSlot.semaphore);
+
+        currentSlot.WaitTillAvailable();
 
         auto getMonotonicNsNow{[]() -> i64 {
             timespec time{};
@@ -264,7 +263,7 @@ namespace skyline::gpu {
                 .pSwapchains = &**vkSwapchain,
                 .pImageIndices = &vkNextImage.second,
                 .waitSemaphoreCount = 1,
-                .pWaitSemaphores = &*swapchainImage.presentSemaphore,
+                .pWaitSemaphores = &*swapchainImage.presentSemaphore
             }); // We don't care about suboptimal images as they are caused by not respecting the transform hint, we handle transformations externally
         }
 
@@ -367,7 +366,7 @@ namespace skyline::gpu {
             }
         }
 
-        constexpr vk::ImageUsageFlags presentUsage{vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst};
+        constexpr vk::ImageUsageFlags presentUsage{vk::ImageUsageFlagBits::eTransferDst}; //!< We only copy to swapchains and never render to them directly
         if ((capabilities.supportedUsageFlags & presentUsage) != presentUsage) [[unlikely]]
             throw exception("Swapchain doesn't support image usage '{}': {}", vk::to_string(presentUsage), vk::to_string(capabilities.supportedUsageFlags));
 
@@ -375,6 +374,9 @@ namespace skyline::gpu {
         auto modes{gpu.vkPhysicalDevice.getSurfacePresentModesKHR(**vkSurface)};
         if (std::find(modes.begin(), modes.end(), requestedMode) == modes.end()) [[unlikely]]
             throw exception("Swapchain doesn't support present mode: {}", vk::to_string(requestedMode));
+
+        vk::SwapchainKHR oldSwapchain{vkSwapchain.has_value() ? *vkSwapchain.value() : vk::SwapchainKHR{VK_NULL_HANDLE}};
+        vkSwapchain.reset();
 
         vkSwapchain.emplace(gpu.vkDevice, vk::SwapchainCreateInfoKHR{
             .surface = **vkSurface,
@@ -394,14 +396,10 @@ namespace skyline::gpu {
         if (vkImages.size() > MaxSwapchainSlotCount) [[unlikely]]
             throw exception("Swapchain has higher image count ({}) than maximum slot count ({})", minImageCount, MaxSwapchainSlotCount);
 
-        for (size_t index{}; index < vkImages.size(); index++)
+        for (size_t index{}; index < vkImages.size(); ++index)
             images[index].SetImage(vkImages[index]);
-/*
-        // We need to clear all the slots which aren't filled, keeping around stale slots could lead to issues
-        for (size_t index{vkImages.size()}; index < images.size(); index++)
-            images[index].ClearImage();
-*/
-        swapchainFormat = format;
+
+        swapchainFormat = underlyingFormat;
         swapchainExtent = extent;
     }
 
@@ -415,8 +413,6 @@ namespace skyline::gpu {
         }
         if (!env->IsSameObject(newSurface, nullptr))
             jSurface = env->NewGlobalRef(newSurface);
-
-        vkSwapchain.reset();
 
         if (jSurface) {
             window = ANativeWindow_fromSurface(env, jSurface);
