@@ -112,7 +112,7 @@ namespace skyline::gpu {
         bool Contains(const texture::Mappings &otherMappings);
 
         /**
-         * @returns The amount of bytes between the start of `otherMappings` and `mappings`. Returns U32_MAX if the start of `otherMappings` is before `mappings`
+         * @returns The amount of bytes between the start of `otherMappings` and `mappings`. Returns UINT32_MAX if the start of `otherMappings` is before `mappings`
          */
         u32 OffsetFrom(const texture::Mappings &otherMappings);
     };

@@ -169,11 +169,9 @@ namespace skyline::gpu {
         texture::Format guestFormat; //!< The format used by the guest, this will differ from `format` if the host doesn't support this
         bool needsDecompression; //!< If the guest format is compressed and needs to be decompressed before being used on the host
         vk::ImageType imageType;
-        static constexpr vk::ImageTiling tiling{vk::ImageTiling::eOptimal}; // Code for linear tiled textures kept in case if it's necessary later on
+        static constexpr vk::ImageTiling tiling{vk::ImageTiling::eOptimal}; //!< Code for linear tiled textures kept in case if it's useful later on
         vk::ImageCreateFlags flags;
         vk::ImageUsageFlags usage;
-
-        DirtyState preExecDirtyState;
 
         struct ExecutorTrackingInfo {
             vk::PipelineStageFlags lastUsedStage{vk::PipelineStageFlagBits::eTopOfPipe};

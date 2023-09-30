@@ -281,8 +281,6 @@ namespace skyline::gpu {
             gpu.state.nce->TrapRegions(*trapHandle, true); // Trap any future CPU reads (optionally) + writes to this texture
         }
 
-        toSync.preExecDirtyState = toSync.dirtyState;
-
         if (toSyncFrom) {
             auto downloadStagingBuffer = gpu.memory.AllocateStagingBuffer(toSyncFrom->copySize);
 
@@ -298,8 +296,8 @@ namespace skyline::gpu {
                         .subresourceRange = {
                             .aspectMask = toSync.format->vkAspect,
                             .levelCount = guest.levelCount,
-                            .layerCount = guest.layerCount,
-                        },
+                            .layerCount = guest.layerCount
+                        }
                     });
                 else if (!(toSync.trackingInfo.waitedStages & vk::PipelineStageFlagBits::eTransfer)) {
                     toSync.AccessForTransfer(commandBuffer, toSync.trackingInfo, true);
@@ -347,7 +345,7 @@ namespace skyline::gpu {
                             .subresourceRange = {
                                 .aspectMask = toSync.format->vkAspect,
                                 .levelCount = guest.levelCount,
-                                .layerCount = guest.layerCount,
+                                .layerCount = guest.layerCount
                             }
                         });
                     else if (!(toSync.trackingInfo.waitedStages & vk::PipelineStageFlagBits::eTransfer)) {
@@ -392,10 +390,9 @@ namespace skyline::gpu {
             } else if ((host.dirtyState == DirtyState::Clean && isWritten) || host.dirtyState == DirtyState::OtherHostDirty) {
                 host.dirtyState = DirtyState::GuestDirty;
             }
-            host.preExecDirtyState = host.dirtyState;
         }
 
-        if (!toSyncFrom) // If state is already CPU dirty/Clean we don't need to do anything
+        if (!toSyncFrom || toSyncFrom->format->vkAspect == (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)) // If state is already CPU dirty/Clean we don't need to do anything
             return;
 
         if (toSyncFrom->GetLayout() == vk::ImageLayout::eUndefined || toSyncFrom->needsDecompression) // We cannot sync the contents of an undefined texture and we don't support recompression of a decompressed texture
@@ -453,7 +450,7 @@ namespace skyline::gpu {
                             .aspectMask = host.format->vkAspect,
                             .levelCount = guest.levelCount,
                             .layerCount = guest.layerCount,
-                        },
+                        }
                     });
 
                 host.UpdateRenderPassUsage(0, texture::RenderPassUsage::None);
@@ -466,9 +463,6 @@ namespace skyline::gpu {
 
         if (syncStagingBuffer)
             syncStagingBuffer = nullptr;
-
-        for (auto &host : hosts)
-            host.preExecDirtyState = host.dirtyState;
 
         unlock();
     }

@@ -249,5 +249,6 @@ Java_org_stratoemu_strato_EmulationActivity_onTrim(JNIEnv *env, jobject thiz, ji
     if (!gpu)
         return; // If the gpu isn't initialized there's nothing to trim
 
-    gpu->texture.OnTrim(level);
+    if (level == 5 || level == 10 || level == 15)
+        gpu->texture.OnTrim(level);
 }

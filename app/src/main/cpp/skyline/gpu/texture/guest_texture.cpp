@@ -37,9 +37,12 @@ namespace skyline::gpu {
     std::optional<texture::TextureCopies> GuestTexture::CalculateOffsetlessOverlap(GuestTexture &other, texture::Format format, texture::Format otherFormat) {
         texture::TextureCopies result{};
 
+        if (tileConfig != other.tileConfig)
+            return CalculateReinterpretCopy(other, format, otherFormat);
+
         if (levelCount == other.levelCount) {
-            if ((util::AlignUp(mipLayouts[0].dimensions.width, 64) != util::AlignUp(other.mipLayouts[0].dimensions.width, 64) ||
-                util::AlignUp(mipLayouts[0].dimensions.height, 8 * tileConfig.blockHeight) != util::AlignUp(other.mipLayouts[0].dimensions.height, 8 * tileConfig.blockHeight))
+            if ((util::AlignUp(mipLayouts[0].dimensions.width, 64U) != util::AlignUp(other.mipLayouts[0].dimensions.width, 64U) ||
+                util::AlignUp(mipLayouts[0].dimensions.height, 8U * tileConfig.blockHeight) != util::AlignUp(other.mipLayouts[0].dimensions.height, 8U * tileConfig.blockHeight))
                 && levelCount > 1) {
                 return CalculateReinterpretCopy(other, format, otherFormat);
             } else {
@@ -73,8 +76,8 @@ namespace skyline::gpu {
             }
         } else {
             if (layerCount == 1 && other.layerCount == 1) {
-                if ((util::AlignUp(mipLayouts[0].dimensions.width, 64) != util::AlignUp(other.mipLayouts[0].dimensions.width, 64) ||
-                    util::AlignUp(mipLayouts[0].dimensions.height, 8 * tileConfig.blockHeight) != util::AlignUp(other.mipLayouts[0].dimensions.height, 8 * tileConfig.blockHeight))
+                if ((util::AlignUp(mipLayouts[0].dimensions.width, 64U) != util::AlignUp(other.mipLayouts[0].dimensions.width, 64U) ||
+                    util::AlignUp(mipLayouts[0].dimensions.height, 8U * tileConfig.blockHeight) != util::AlignUp(other.mipLayouts[0].dimensions.height, 8U * tileConfig.blockHeight))
                     && levelCount > 1)
                     return CalculateReinterpretCopy(other, format, otherFormat);
 
@@ -135,11 +138,11 @@ namespace skyline::gpu {
             return std::nullopt;
 
         if (pTileConfig != tileConfig)
-            return std::nullopt; // The tiling mode is not compatible, this is a hard requirement
+            return std::nullopt; //!< The tiling mode is not compatible, this is a hard requirement
 
         if (layerCount > 1 || pLayerCount > 1) {
             if (pLayerStride != layerStride)
-                return std::nullopt; // The layer stride is not compatible, if the stride doesn't match then layers won't be aligned
+                return std::nullopt; //!< The layer stride is not compatible, if the stride doesn't match then layers won't be aligned
         }
 
         u32 layer{offset / layerStride}, level{};
@@ -151,23 +154,23 @@ namespace skyline::gpu {
             }
 
             if (offset - layerOffset != levelOffset)
-                return std::nullopt; // The offset is not aligned to the start of a level
+                return std::nullopt; //!< The offset is not aligned to the start of a level
 
-            if (util::AlignUp(mipLayouts[level].dimensions.width, 64) != util::AlignUp(pTextureSizes.width, 64) || util::AlignUp(mipLayouts[level].dimensions.height, 8 * tileConfig.blockHeight) != util::AlignUp(pTextureSizes.height, 8 * tileConfig.blockHeight))
-                return std::nullopt; // The texture has incompatible dimensions
+            if (util::AlignUp(mipLayouts[level].dimensions.width, 64U) != util::AlignUp(pTextureSizes.width, 64U) || util::AlignUp(mipLayouts[level].dimensions.height, 8U * tileConfig.blockHeight) != util::AlignUp(pTextureSizes.height, 8 * tileConfig.blockHeight))
+                return std::nullopt; //!< The texture has incompatible dimensions
         } else {
             if (levelCount != 1) [[unlikely]]
                 LOGE("Mipmapped pitch textures are not supported! levelCount: {}", levelCount);
 
             if (util::AlignUp(mipLayouts[level].dimensions.width, 64) != util::AlignUp(pTextureSizes.width, 64) || mipLayouts[0].dimensions.height != pTextureSizes.height)
-                return std::nullopt; // The texture has incompatible dimensions
+                return std::nullopt; //!< The texture has incompatible dimensions
         }
 
         if (mipLayouts[level].dimensions.depth != pTextureSizes.depth)
-            return std::nullopt; // The texture has incompatible dimensions
+            return std::nullopt; //!< The texture has incompatible dimensions
 
         if (layer + pLayerCount > layerCount || level + pLevelCount > levelCount)
-            return std::nullopt; // The layer/level count is out of bounds
+            return std::nullopt; //!< The layer/level count is out of bounds
 
         return vk::ImageSubresourceRange{
             .aspectMask = aspectMask,
@@ -178,10 +181,7 @@ namespace skyline::gpu {
         };
     }
 
-    // TODO: Finish and fixup this
     std::optional<texture::TextureCopies> GuestTexture::CalculateCopy(GuestTexture &other, texture::Format format, texture::Format otherFormat) {
-        u32 offset{OffsetFrom(other.mappings)}, otherOffset{other.OffsetFrom(mappings)};
-
         if (tileConfig.mode != other.tileConfig.mode) [[unlikely]] {
             LOGW("Overlaps of different tile modes are not supported!");
             return std::nullopt;
@@ -195,18 +195,15 @@ namespace skyline::gpu {
             return std::nullopt;
         }
 
-        if (offset == 0) {
+        u32 dstOffset{OffsetFrom(other.mappings)}, srcOffset{other.OffsetFrom(mappings)};
+
+        if (dstOffset == 0) {
             return CalculateOffsetlessOverlap(other, format, otherFormat);
         } else {
-            if (format->IsCompressed() || otherFormat->IsCompressed())
-                return std::nullopt;
+            bool flip{dstOffset == UINT32_MAX};
+            u32 &actualOffset{flip ? srcOffset : dstOffset};
 
-            bool flip{offset == UINT32_MAX};
-            u32 &actualOffset{flip ? otherOffset : offset};
-            GuestTexture &largerGuest{flip ? other : *this};
-            GuestTexture &smallerGuest{flip ? *this : other};
-
-            if (largerGuest.size <= actualOffset)
+            if (actualOffset == UINT32_MAX)
                 return std::nullopt;
 
             return CalculateReinterpretCopy(other, format, otherFormat);
@@ -228,10 +225,14 @@ namespace skyline::gpu {
             otherLayer = dstOffset / other.layerStride;
 
         if (tileConfig.mode == texture::TileMode::Block) {
-            LOGV("Src: {}x{}x{} format: {}, levels: {}, layers: {}, address: 0x{}-0x{}, blockHeight: {}, blockDepth: {}", other.mipLayouts[0].dimensions.width / otherFormat->bpb, other.mipLayouts[0].dimensions.height, other.mipLayouts[0].dimensions.depth, vk::to_string(otherFormat->vkFormat), other.levelCount, other.layerCount, fmt::ptr(other.mappings.front().data()), fmt::ptr(other.mappings.front().end().base()), other.mipLayouts[0].blockHeight, other.mipLayouts[0].blockDepth);
-            LOGV("Dst: {}x{}x{} format: {}, levels: {}, layers: {}, address: 0x{}-0x{}, blockHeight: {}, blockDepth: {}", mipLayouts[0].dimensions.width / format->bpb, mipLayouts[0].dimensions.height, mipLayouts[0].dimensions.depth, vk::to_string(format->vkFormat), levelCount, layerCount, fmt::ptr(mappings.front().data()), fmt::ptr(mappings.front().end().base()), mipLayouts[0].blockHeight, mipLayouts[0].blockDepth);
+            LOGI("Src: {}x{}x{} format: {}, levels: {}, layers: {}, address: {}-{}, blockHeight: {}, blockDepth: {}", other.mipLayouts[0].dimensions.width / otherFormat->bpb, other.mipLayouts[0].dimensions.height, other.mipLayouts[0].dimensions.depth, vk::to_string(otherFormat->vkFormat), other.levelCount, other.layerCount, fmt::ptr(other.mappings.front().data()), fmt::ptr(other.mappings.front().end().base()), other.mipLayouts[0].blockHeight, other.mipLayouts[0].blockDepth);
+            LOGI("Dst: {}x{}x{} format: {}, levels: {}, layers: {}, address: {}-{}, blockHeight: {}, blockDepth: {}", mipLayouts[0].dimensions.width / format->bpb, mipLayouts[0].dimensions.height, mipLayouts[0].dimensions.depth, vk::to_string(format->vkFormat), levelCount, layerCount, fmt::ptr(mappings.front().data()), fmt::ptr(mappings.front().end().base()), mipLayouts[0].blockHeight, mipLayouts[0].blockDepth);
 
-            ///!< FIXME: Figure out a more optimised (and less ugly) approach to this
+            //!< Blocklinear texture addresses must be aligned to the size of 1 Gob (512 bytes), however workarounds in the blit engine can cause textures to not fit this requirement
+            if (!util::IsAligned(mappings.front().data(), 64U * 8U) || !util::IsAligned(other.mappings.front().data(), 64U * 8U))
+                return std::nullopt;
+
+            //!< FIXME: Figure out a more optimised (and less ugly) approach to this
             u32 inMipOffset{};
             if (flip) {
                 u32 layerOffset{layer * layerStride}, levelOffset{};
@@ -243,7 +244,10 @@ namespace skyline::gpu {
 
                 if ((srcOffset - layerOffset) != levelOffset) {
                     inMipOffset = static_cast<u32>(mipLayouts[level].blockLinearSize) - ((layerOffset + levelOffset) - srcOffset);
-                    --level;
+                    if (inMipOffset > mipLayouts[level].blockLinearSize)
+                        return std::nullopt;
+                    else
+                        --level;
                 }
             } else {
                 u32 layerOffset{otherLayer * other.layerStride}, levelOffset{};
@@ -255,7 +259,11 @@ namespace skyline::gpu {
 
                 if ((dstOffset - layerOffset) != levelOffset) {
                     inMipOffset = static_cast<u32>(other.mipLayouts[otherLevel].blockLinearSize) - ((layerOffset + levelOffset) - dstOffset);
-                    --otherLevel;
+
+                    if (inMipOffset > other.mipLayouts[otherLevel].blockLinearSize)
+                        return std::nullopt;
+                    else
+                        --otherLevel;
                 }
             }
 
@@ -330,7 +338,7 @@ namespace skyline::gpu {
 
                             otherImageOffset.x = static_cast<i32>(otherCurrentBlock * otherGobExtent.width);
                             otherImageOffset.y = static_cast<i32>((otherCurrentRob * other.mipLayouts[otherLevel].blockHeight) + (otherCurrentGob * 8U));
-                            otherImageOffset.z = static_cast<i32>((otherCurrentMob * other.mipLayouts[otherLevel].blockDepth) + otherSliceSize);
+                            otherImageOffset.z = static_cast<i32>((otherCurrentMob * other.mipLayouts[otherLevel].blockDepth) + otherCurrentSlice);
                         }
 
                         inMipOffset = 0;
@@ -344,6 +352,9 @@ namespace skyline::gpu {
                                         if (currentBlock < robWidthBlocks && otherCurrentBlock < otherRobWidthBlocks && imageOffset.x < imageExtent.width && otherImageOffset.x < otherImageExtent.width) {
                                             if (imageOffset.y < imageExtent.height && otherImageOffset.y < otherImageExtent.height) {
                                                 if (imageOffset.z < imageExtent.depth && otherImageOffset.z < otherImageExtent.depth) {
+                                                    texture::Dimensions minDim{std::min(std::min(other.mipLayouts[otherLevel].dimensions.width, static_cast<u32>(otherImageOffset.x) + 64U) - static_cast<u32>(otherImageOffset.x), std::min(mipLayouts[level].dimensions.width, static_cast<u32>(imageOffset.x) + 64U) - static_cast<u32>(imageOffset.x)),
+                                                                               std::min(std::min(otherImageExtent.height, static_cast<u32>(otherImageOffset.y) + otherGobExtent.height) - static_cast<u32>(otherImageOffset.y), std::min(imageExtent.height, static_cast<u32>(imageOffset.y) + gobExtent.height) - static_cast<u32>(imageOffset.y)),1};
+
                                                     results.toStaging.emplace_back(vk::BufferImageCopy{
                                                         .imageSubresource = {
                                                             .aspectMask = otherFormat->vkAspect,
@@ -351,9 +362,7 @@ namespace skyline::gpu {
                                                             .mipLevel = otherLevel,
                                                             .baseArrayLayer = otherLayer
                                                         },
-                                                        .imageExtent = {std::min(otherImageExtent.width, static_cast<u32>(otherImageOffset.x) + otherGobExtent.width) - static_cast<u32>(otherImageOffset.x),
-                                                                        std::min(otherImageExtent.height, static_cast<u32>(otherImageOffset.y) + otherGobExtent.height) - static_cast<u32>(otherImageOffset.y),
-                                                                        gobExtent.depth},
+                                                        .imageExtent = {minDim.width / otherFormat->bpb, minDim.height, gobExtent.depth},
                                                         .bufferOffset = results.stagingBufferSize,
                                                         .imageOffset = otherImageOffset
                                                     });
@@ -364,18 +373,12 @@ namespace skyline::gpu {
                                                             .mipLevel = level,
                                                             .baseArrayLayer = layer
                                                         },
-                                                        .imageExtent = {std::min(imageExtent.width, static_cast<u32>(imageOffset.x) + gobExtent.width) - static_cast<u32>(imageOffset.x),
-                                                                        std::min(imageExtent.height, static_cast<u32>(imageOffset.y) + gobExtent.height) - static_cast<u32>(imageOffset.y),
-                                                                        gobExtent.depth},
+                                                        .imageExtent = {minDim.width / format->bpb, minDim.height, gobExtent.depth},
                                                         .bufferOffset = results.stagingBufferSize,
                                                         .imageOffset = imageOffset
                                                     });
 
-                                                    if (results.toStaging.back().imageExtent.width == 0) {
-                                                        LOGE("Stuff broke");
-                                                    }
-
-                                                    results.stagingBufferSize += 64 * 8;
+                                                    results.stagingBufferSize += 64U * 8U;
                                                 }
                                             }
                                         }
@@ -398,13 +401,13 @@ namespace skyline::gpu {
                                 if (currentSlice == mipLayouts[level].blockDepth) {
                                     imageOffset.z -= static_cast<i32>(mipLayouts[level].blockDepth);
                                     currentSlice = 0;
-                                    imageOffset.x += static_cast<i32>(gobExtent.width);
+                                    imageOffset.x += 64;
                                     ++currentBlock;
                                 }
                                 if (otherCurrentSlice == other.mipLayouts[otherLevel].blockDepth) {
                                     otherImageOffset.z -= static_cast<i32>(other.mipLayouts[otherLevel].blockDepth);
                                     otherCurrentSlice = 0;
-                                    otherImageOffset.x += static_cast<i32>(otherGobExtent.width);
+                                    otherImageOffset.x += 64;
                                     ++otherCurrentBlock;
                                 }
                             }
@@ -441,11 +444,17 @@ namespace skyline::gpu {
                         imageOffset = vk::Offset3D{};
                         currentMob = 0;
                         ++level;
+
+                        if (level != levelCount)
+                            LOGW("Level offsets are unimplemented");
                     }
                     if (otherCurrentMob == otherMobCount) {
                         otherImageOffset = vk::Offset3D{};
                         otherCurrentMob = 0;
                         ++otherLevel;
+
+                        if (otherLevel != other.levelCount)
+                            LOGW("Other Level offsets are unimplemented");
                     }
                 }
 
@@ -496,15 +505,18 @@ namespace skyline::gpu {
     u32 GuestTexture::OffsetFrom(const texture::Mappings &otherMappings) {
         if (otherMappings.front().data() < mappings.front().data())
             return UINT32_MAX;
+        else if (otherMappings.front().data() == mappings.front().data())
+            return 0U;
 
         u32 offset{};
         if (otherMappings.front().valid()) {
             auto it{mappings.begin()};
-            while (!it->contains(otherMappings.front().data())) {
+            while (it != mappings.end() && !it->contains(otherMappings.front().data())) {
                 offset += it->size();
                 ++it;
             }
-            offset += otherMappings.front().data() - it->data();
+            if (it != mappings.end())
+                offset += otherMappings.front().data() - it->data();
         }
 
         return offset;

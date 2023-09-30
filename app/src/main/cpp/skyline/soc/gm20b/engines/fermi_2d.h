@@ -14,7 +14,7 @@ namespace skyline::soc::gm20b {
 namespace skyline::soc::gm20b::engine::fermi2d {
     /**
      * @brief The Fermi 2D engine handles perfoming blit and resolve operations.
-     * It is also capable of basic 2D rendering, however this feature remains unused by games.
+     * It is also capable of basic 2D rendering, however this feature remains unused by the switch.
      *
      * @url https://github.com/devkitPro/deko3d/blob/master/source/maxwell/engine_2d.def
      * @url https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/twod/cl902d.h
@@ -70,7 +70,11 @@ namespace skyline::soc::gm20b::engine::fermi2d {
         };
 
         struct MMESwitchState {
-
+            bool isValid : 1;
+            u8 _pad_ : 3;
+            u8 saveMacro;
+            u8 restoreMacro;
+            u16 _pad2_ : 8;
         };
 
         union Registers {
@@ -135,7 +139,7 @@ namespace skyline::soc::gm20b::engine::fermi2d {
             Register<0x54, u32> instrumentationMethodHeader;
             Register<0x55, u32> instrumentationMethodData;
 
-
+            Register<0x7B, MMESwitchState> mmeSwitchState;
 
             Register<0x80, type::Surface> dst;
             Register<0x8C, type::Surface> src;

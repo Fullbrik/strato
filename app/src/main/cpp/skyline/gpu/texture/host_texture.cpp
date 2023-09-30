@@ -523,7 +523,7 @@ namespace skyline::gpu {
               texture.guest.levelCount)},
           needsDecompression{info.viewFormat != format},
           imageType{imageType},
-          flags{mutableFormat ? vk::ImageCreateFlagBits::eMutableFormat : vk::ImageCreateFlags{}},
+          flags{mutableFormat ? vk::ImageCreateFlagBits::eMutableFormat | vk::ImageCreateFlagBits::eExtendedUsage : vk::ImageCreateFlags{}},
           usage{vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled},
           copySize{static_cast<u32>(texture::CalculateLinearLayerStride(copyLayouts) * guest.layerCount)} {
         auto &gpu{texture.gpu};
@@ -534,10 +534,6 @@ namespace skyline::gpu {
                 break;
             }
         }
-        preExecDirtyState = dirtyState;
-
-        if (mutableFormat)
-            flags |= vk::ImageCreateFlagBits::eExtendedUsage;
 
         if (info.extraUsageFlags & vk::ImageUsageFlagBits::eStorage) {
             if (FormatSupportsStorageImage(gpu, *format))
@@ -579,7 +575,7 @@ namespace skyline::gpu {
         backing = tiling != vk::ImageTiling::eLinear ? gpu.memory.AllocateImage(imageCreateInfo) : gpu.memory.AllocateMappedImage(imageCreateInfo);
 
         LOGD("Variant created: {}x{}x{}, sample count: {}, format: {}, image type: {}, mapped range: {} - {}, {}",
-                     dimensions.width, dimensions.height, dimensions.depth, static_cast<i32>(sampleCount), vk::to_string(guestFormat->vkFormat), vk::to_string(imageType), fmt::ptr(guest.mappings.front().data()), fmt::ptr(guest.mappings.front().end().base()), fmt::ptr(&texture));
+             dimensions.width, dimensions.height, dimensions.depth, static_cast<i32>(sampleCount), vk::to_string(guestFormat->vkFormat), vk::to_string(imageType), fmt::ptr(guest.mappings.front().data()), fmt::ptr(guest.mappings.front().end().base()), fmt::ptr(&texture));
     }
 
     HostTexture::~HostTexture() {
@@ -604,7 +600,7 @@ namespace skyline::gpu {
                 .subresourceRange = {
                     .aspectMask = format->vkAspect,
                     .levelCount = texture.guest.levelCount,
-                    .layerCount = texture.guest.layerCount,
+                    .layerCount = texture.guest.layerCount
                 }
             });
         } else {
@@ -619,7 +615,7 @@ namespace skyline::gpu {
                 .subresourceRange = {
                     .aspectMask = format->vkAspect,
                     .levelCount = texture.guest.levelCount,
-                    .layerCount = texture.guest.layerCount,
+                    .layerCount = texture.guest.layerCount
                 }
             });
         }
@@ -638,7 +634,7 @@ namespace skyline::gpu {
                 .subresourceRange = {
                     .aspectMask = format->vkAspect,
                     .levelCount = texture.guest.levelCount,
-                    .layerCount = texture.guest.layerCount,
+                    .layerCount = texture.guest.layerCount
                 }
             });
         } else {
@@ -653,7 +649,7 @@ namespace skyline::gpu {
                 .subresourceRange = {
                     .aspectMask = format->vkAspect,
                     .levelCount = texture.guest.levelCount,
-                    .layerCount = texture.guest.layerCount,
+                    .layerCount = texture.guest.layerCount
                 }
             });
         }
