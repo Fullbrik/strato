@@ -243,11 +243,11 @@ namespace skyline::gpu {
         return *nullImageView;
     }
 
-    // TODO: Implement this using an specialised LRFU algorithim
+    // TODO: Implement this using an specialised LRFU algorithm
     void TextureManager::OnTrim(i32 level) {
         std::unique_lock lock{mutex};
 
-        LOGWNF("Texture garbage collection triggered: level: {}", level);
+        LOGW("Texture garbage collection triggered: level: {}", level);
 
         textures.sort([](const auto &texture, const auto &texture2) {
             auto maxUsage{[](const std::shared_ptr<Texture> &texture) {

@@ -192,12 +192,13 @@ namespace skyline::gpu::interconnect::kepler_compute {
                         [&](const Shader::TextureDescriptor &desc, size_t arrayIdx) {
                             BindlessHandle handle{ReadBindlessHandle(ctx, constantBuffers, desc, arrayIdx)};
                             auto binding{GetTextureBinding(ctx, desc, samplers, textures, handle)};
-                            binding.second->RequestSync(ctx.executor, {
-                                .isRead = true,
-                                .isWritten = false,
-                                .usedStage = vk::PipelineStageFlagBits::eComputeShader,
-                                .usedFlags = vk::AccessFlagBits::eShaderRead
-                            });
+                            if (binding.second)
+                                binding.second->RequestSync(ctx.executor, {
+                                    .isRead = true,
+                                    .isWritten = false,
+                                    .usedStage = vk::PipelineStageFlagBits::eComputeShader,
+                                    .usedFlags = vk::AccessFlagBits::eShaderRead
+                                });
 
                             return binding.first;
                         });
@@ -206,12 +207,13 @@ namespace skyline::gpu::interconnect::kepler_compute {
                         [&](const Shader::ImageDescriptor &desc, size_t arrayIdx) {
                             BindlessHandle handle{ReadBindlessHandle(ctx, constantBuffers, desc, arrayIdx)};
                             auto binding{GetStorageTextureBinding(ctx, desc, samplers, textures, handle, desc.format)};
-                            binding.second->RequestSync(ctx.executor, {
-                                .isRead = desc.is_read,
-                                .isWritten = desc.is_written,
-                                .usedStage = vk::PipelineStageFlagBits::eComputeShader,
-                                .usedFlags = (desc.is_read ? vk::AccessFlagBits::eShaderRead : vk::AccessFlags{}) | (desc.is_written ? vk::AccessFlagBits::eShaderWrite : vk::AccessFlags{})
-                            });
+                            if (binding.second)
+                                binding.second->RequestSync(ctx.executor, {
+                                    .isRead = desc.is_read,
+                                    .isWritten = desc.is_written,
+                                    .usedStage = vk::PipelineStageFlagBits::eComputeShader,
+                                    .usedFlags = (desc.is_read ? vk::AccessFlagBits::eShaderRead : vk::AccessFlags{}) | (desc.is_written ? vk::AccessFlagBits::eShaderWrite : vk::AccessFlags{})
+                                });
 
                             return binding.first;
                         });

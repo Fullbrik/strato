@@ -83,7 +83,7 @@ namespace skyline::gpu {
         std::vector<u8> deswizzleBuffer{};
         u8 *deswizzleOutput;
         if (guestFormat != format) {
-            deswizzleBuffer.resize(copySize);
+            deswizzleBuffer.resize(guest.linearSize);
             deswizzleOutput = deswizzleBuffer.data();
         } else [[likely]] {
             deswizzleOutput = bufferData;

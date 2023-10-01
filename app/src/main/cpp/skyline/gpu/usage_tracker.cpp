@@ -67,7 +67,7 @@ namespace skyline::gpu {
     }
 
     bool TextureUsageTracker::RequestSync(interconnect::CommandExecutor &executor, TextureHandle texture, HostTexture *toSync, bool markDirty) {
-        std::unique_lock lock{mutex};
+        std::unique_lock syncLock{mutex};
         ++lastSequence;
 
         std::vector<TextureMap::Interval> intervals{};
@@ -99,38 +99,36 @@ namespace skyline::gpu {
 
         u32 i{};
         for (auto &overlap : overlaps) {
-            if (auto &textureCopy{bufferImageCopies[i]}) {
+            if (auto &textureCopy{bufferImageCopies[i]}; textureCopy && textureCopy->stagingBufferSize) {
                 executor.AttachTexture(overlap.get().texture->shared_from_this());
 
-                if (textureCopy->stagingBufferSize) {
-                    std::unique_lock lock2{overlap.get().texture->accessMutex};
+                std::unique_lock textureLock{overlap.get().texture->accessMutex};
 
-                    auto stagingBuffer{gpu.memory.AllocateStagingBuffer(textureCopy->stagingBufferSize)};
-                    executor.cycle->AttachObject(stagingBuffer->shared_from_this());
+                auto stagingBuffer{gpu.memory.AllocateStagingBuffer(textureCopy->stagingBufferSize)};
+                executor.cycle->AttachObject(stagingBuffer->shared_from_this());
 
-                    executor.AddOutsideRpCommand([stagingBuffer = stagingBuffer->shared_from_this(), overlap = overlap.get(), toSync, overlapTrackingInfo = overlap.get().dirtyTexture->trackingInfo, trackingInfo = toSync->trackingInfo, bufferImageCopy = *textureCopy](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &cycle, GPU &) {
-                        if (!(trackingInfo.waitedStages & vk::PipelineStageFlagBits::eTransfer))
-                            overlap.dirtyTexture->AccessForTransfer(commandBuffer, overlapTrackingInfo, false);
-                        toSync->AccessForTransfer(commandBuffer, trackingInfo, true);
+                executor.AddOutsideRpCommand([stagingBuffer = stagingBuffer->shared_from_this(), overlap = overlap.get(), toSync, overlapTrackingInfo = overlap.get().dirtyTexture->trackingInfo, trackingInfo = toSync->trackingInfo, bufferImageCopy = *textureCopy](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &cycle, GPU &) {
+                    if (!(trackingInfo.waitedStages & vk::PipelineStageFlagBits::eTransfer))
+                        overlap.dirtyTexture->AccessForTransfer(commandBuffer, overlapTrackingInfo, false);
+                    toSync->AccessForTransfer(commandBuffer, trackingInfo, true);
 
-                        commandBuffer.copyImageToBuffer(overlap.dirtyTexture->GetImage(), overlap.dirtyTexture->GetLayout(), stagingBuffer->vkBuffer, vk::ArrayProxy<vk::BufferImageCopy>{static_cast<u32>(bufferImageCopy.toStaging.size()), const_cast<vk::BufferImageCopy *>(bufferImageCopy.toStaging.data())});
-                        commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, {}, vk::BufferMemoryBarrier{
-                            .buffer = stagingBuffer->vkBuffer,
-                            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-                            .dstAccessMask = vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite,
-                            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                            .size = stagingBuffer->size()
-                        }, {});
-                        commandBuffer.copyBufferToImage(stagingBuffer->vkBuffer, toSync->GetImage(), toSync->GetLayout(), vk::ArrayProxy<vk::BufferImageCopy>{static_cast<u32>(bufferImageCopy.fromStaging.size()), const_cast<vk::BufferImageCopy *>(bufferImageCopy.fromStaging.data())});
-                    });
+                    commandBuffer.copyImageToBuffer(overlap.dirtyTexture->GetImage(), overlap.dirtyTexture->GetLayout(), stagingBuffer->vkBuffer, vk::ArrayProxy<vk::BufferImageCopy>{static_cast<u32>(bufferImageCopy.toStaging.size()), const_cast<vk::BufferImageCopy *>(bufferImageCopy.toStaging.data())});
+                    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, {}, vk::BufferMemoryBarrier{
+                        .buffer = stagingBuffer->vkBuffer,
+                        .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+                        .dstAccessMask = vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .size = stagingBuffer->size()
+                    }, {});
+                    commandBuffer.copyBufferToImage(stagingBuffer->vkBuffer, toSync->GetImage(), toSync->GetLayout(), vk::ArrayProxy<vk::BufferImageCopy>{static_cast<u32>(bufferImageCopy.fromStaging.size()), const_cast<vk::BufferImageCopy *>(bufferImageCopy.fromStaging.data())});
+                });
 
-                    overlap.get().dirtyTexture->trackingInfo.waitedStages |= vk::PipelineStageFlagBits::eTransfer;
+                overlap.get().dirtyTexture->trackingInfo.waitedStages |= vk::PipelineStageFlagBits::eTransfer;
 
-                    toSync->trackingInfo.lastUsedStage = vk::PipelineStageFlagBits::eTransfer;
-                    toSync->trackingInfo.lastUsedAccessFlag = vk::AccessFlagBits::eTransferWrite;
-                    toSync->trackingInfo.waitedStages = {};
-                }
+                toSync->trackingInfo.lastUsedStage = vk::PipelineStageFlagBits::eTransfer;
+                toSync->trackingInfo.lastUsedAccessFlag = vk::AccessFlagBits::eTransferWrite;
+                toSync->trackingInfo.waitedStages = {};
             }
 
             ++i;

@@ -211,18 +211,18 @@ namespace skyline::gpu {
     }
 
     std::optional<texture::TextureCopies> GuestTexture::CalculateReinterpretCopy(GuestTexture &other, texture::Format format, texture::Format otherFormat) {
-        u32 dstOffset{OffsetFrom(other.mappings)}, srcOffset{other.OffsetFrom(mappings)};
-        bool flip{dstOffset == UINT32_MAX}; //!< If true then the start of the src/other texture is before the dst/this texture. Otherwise it's false
+        u32 srcOffset{OffsetFrom(other.mappings)}, dstOffset{other.OffsetFrom(mappings)};
+        bool flip{srcOffset == UINT32_MAX}; //!< If true then the start of the src/other texture is before the dst/this texture. Otherwise it's false
 
         texture::TextureCopies results{};
 
-        u32 layer{}, level{};
-        u32 otherLayer{}, otherLevel{};
+        u32 dstLayer{}, dstLevel{};
+        u32 srcLayer{}, srcLevel{};
 
         if (flip)
-            layer = srcOffset / layerStride;
+            dstLayer = dstOffset / layerStride;
         else
-            otherLayer = dstOffset / other.layerStride;
+            srcLayer = srcOffset / other.layerStride;
 
         if (tileConfig.mode == texture::TileMode::Block) {
             LOGI("Src: {}x{}x{} format: {}, levels: {}, layers: {}, address: {}-{}, blockHeight: {}, blockDepth: {}", other.mipLayouts[0].dimensions.width / otherFormat->bpb, other.mipLayouts[0].dimensions.height, other.mipLayouts[0].dimensions.depth, vk::to_string(otherFormat->vkFormat), other.levelCount, other.layerCount, fmt::ptr(other.mappings.front().data()), fmt::ptr(other.mappings.front().end().base()), other.mipLayouts[0].blockHeight, other.mipLayouts[0].blockDepth);
@@ -235,147 +235,147 @@ namespace skyline::gpu {
             //!< FIXME: Figure out a more optimised (and less ugly) approach to this
             u32 inMipOffset{};
             if (flip) {
-                u32 layerOffset{layer * layerStride}, levelOffset{};
+                u32 layerOffset{dstLayer * layerStride}, levelOffset{};
 
-                while (level < levelCount && (layerOffset + levelOffset) < srcOffset) {
-                    ++level;
-                    levelOffset += mipLayouts[level].blockLinearSize;
-                }
-
-                if ((srcOffset - layerOffset) != levelOffset) {
-                    inMipOffset = static_cast<u32>(mipLayouts[level].blockLinearSize) - ((layerOffset + levelOffset) - srcOffset);
-                    if (inMipOffset > mipLayouts[level].blockLinearSize)
-                        return std::nullopt;
-                    else
-                        --level;
-                }
-            } else {
-                u32 layerOffset{otherLayer * other.layerStride}, levelOffset{};
-
-                while (otherLevel < other.levelCount && (layerOffset + levelOffset) < dstOffset) {
-                    ++otherLevel;
-                    levelOffset += other.mipLayouts[otherLevel].blockLinearSize;
+                while (dstLevel < levelCount && (layerOffset + levelOffset) < dstOffset) {
+                    ++dstLevel;
+                    levelOffset += mipLayouts[dstLevel].blockLinearSize;
                 }
 
                 if ((dstOffset - layerOffset) != levelOffset) {
-                    inMipOffset = static_cast<u32>(other.mipLayouts[otherLevel].blockLinearSize) - ((layerOffset + levelOffset) - dstOffset);
-
-                    if (inMipOffset > other.mipLayouts[otherLevel].blockLinearSize)
+                    inMipOffset = static_cast<u32>(mipLayouts[dstLevel].blockLinearSize) - ((layerOffset + levelOffset) - dstOffset);
+                    if (inMipOffset > mipLayouts[dstLevel].blockLinearSize)
                         return std::nullopt;
                     else
-                        --otherLevel;
+                        --dstLevel;
+                }
+            } else {
+                u32 layerOffset{srcLayer * other.layerStride}, levelOffset{};
+
+                while (srcLevel < other.levelCount && (layerOffset + levelOffset) < srcOffset) {
+                    ++srcLevel;
+                    levelOffset += other.mipLayouts[srcLevel].blockLinearSize;
+                }
+
+                if ((srcOffset - layerOffset) != levelOffset) {
+                    inMipOffset = static_cast<u32>(other.mipLayouts[srcLevel].blockLinearSize) - ((layerOffset + levelOffset) - srcOffset);
+
+                    if (inMipOffset > other.mipLayouts[srcLevel].blockLinearSize)
+                        return std::nullopt;
+                    else
+                        --srcLevel;
                 }
             }
 
 
-            u32 sliceSize, blockSize;
-            u32 currentGob{}, currentSlice{}, currentBlock{}, currentRob{}, currentMob{};
-            u32 robWidthBlocks, alignedRobWidthBlocks, robCount, mobCount;
-            vk::Offset3D imageOffset{};
-            vk::Extent3D gobExtent{64U / format->bpb, 8, 1};
+            u32 dstSliceSize, dstBlockSize;
+            u32 dstGob{}, dstSlice{}, dstBlock{}, dstRob{}, dstMob{};
+            u32 dstRobWidthBlocks, dstAlignedRobWidthBlocks, dstRobCount, dstMobCount;
+            vk::Offset3D dstImageOffset{};
+            vk::Extent3D dstGobExtent{64U / format->bpb, 8, 1};
 
-            u32 otherSliceSize, otherBlockSize;
-            u32 otherCurrentGob{}, otherCurrentSlice{}, otherCurrentBlock{}, otherCurrentRob{}, otherCurrentMob{};
-            u32 otherRobWidthBlocks, otherAlignedRobWidthBlocks, otherRobCount, otherMobCount;
-            vk::Offset3D otherImageOffset{};
-            vk::Extent3D otherGobExtent{64U / otherFormat->bpb, 8, 1};
+            u32 srcSliceSize, srcBlockSize;
+            u32 srcGob{}, srcSlice{}, srcBlock{}, srcRob{}, srcMob{};
+            u32 srcRobWidthBlocks, srcAlignedRobWidthBlocks, srcRobCount, srcMobCount;
+            vk::Offset3D srcImageOffset{};
+            vk::Extent3D srcGobExtent{64U / otherFormat->bpb, 8, 1};
 
-            for (; layer < layerCount && otherLayer < other.layerCount;) {
-                for (; level < levelCount && otherLevel < other.levelCount;) {
-                    vk::Extent3D imageExtent{mipLayouts[level].dimensions.width / format->bpb, mipLayouts[level].dimensions.height, mipLayouts[level].dimensions.depth};
+            for (; dstLayer < layerCount && srcLayer < other.layerCount;) {
+                for (; dstLevel < levelCount && srcLevel < other.levelCount;) {
+                    vk::Extent3D imageExtent{mipLayouts[dstLevel].dimensions.width / format->bpb, mipLayouts[dstLevel].dimensions.height, mipLayouts[dstLevel].dimensions.depth};
 
-                    sliceSize = 64U * 8U * static_cast<u32>(mipLayouts[level].blockHeight);
-                    blockSize = sliceSize * static_cast<u32>(mipLayouts[level].blockDepth);
+                    dstSliceSize = 64U * 8U * static_cast<u32>(mipLayouts[dstLevel].blockHeight);
+                    dstBlockSize = dstSliceSize * static_cast<u32>(mipLayouts[dstLevel].blockDepth);
 
-                    robWidthBlocks = util::DivideCeil(mipLayouts[level].dimensions.width, 64U);
-                    alignedRobWidthBlocks = util::AlignUp(robWidthBlocks, tileConfig.sparseBlockWidth);
-                    robCount = util::DivideCeil(mipLayouts[level].dimensions.height, 8U * static_cast<u32>(mipLayouts[level].blockHeight));
-                    mobCount = util::DivideCeil(mipLayouts[level].dimensions.depth, static_cast<u32>(mipLayouts[level].blockDepth));
+                    dstRobWidthBlocks = util::DivideCeil(mipLayouts[dstLevel].dimensions.width, 64U);
+                    dstAlignedRobWidthBlocks = util::AlignUp(dstRobWidthBlocks, tileConfig.sparseBlockWidth);
+                    dstRobCount = util::DivideCeil(mipLayouts[dstLevel].dimensions.height, 8U * static_cast<u32>(mipLayouts[dstLevel].blockHeight));
+                    dstMobCount = util::DivideCeil(mipLayouts[dstLevel].dimensions.depth, static_cast<u32>(mipLayouts[dstLevel].blockDepth));
 
-                    vk::Extent3D otherImageExtent{other.mipLayouts[otherLevel].dimensions.width / otherFormat->bpb, other.mipLayouts[otherLevel].dimensions.height, other.mipLayouts[otherLevel].dimensions.depth};
+                    vk::Extent3D otherImageExtent{other.mipLayouts[srcLevel].dimensions.width / otherFormat->bpb, other.mipLayouts[srcLevel].dimensions.height, other.mipLayouts[srcLevel].dimensions.depth};
 
-                    otherSliceSize = 64U * 8U * static_cast<u32>(other.mipLayouts[otherLevel].blockHeight);
-                    otherBlockSize = otherSliceSize * static_cast<u32>(other.mipLayouts[otherLevel].blockDepth);
+                    srcSliceSize = 64U * 8U * static_cast<u32>(other.mipLayouts[srcLevel].blockHeight);
+                    srcBlockSize = srcSliceSize * static_cast<u32>(other.mipLayouts[srcLevel].blockDepth);
 
-                    otherRobWidthBlocks = util::DivideCeil(other.mipLayouts[otherLevel].dimensions.width, 64U);
-                    otherAlignedRobWidthBlocks = util::AlignUp(otherRobWidthBlocks, other.tileConfig.sparseBlockWidth);
-                    otherRobCount = util::DivideCeil(other.mipLayouts[otherLevel].dimensions.height, 8U * static_cast<u32>(other.mipLayouts[otherLevel].blockHeight));
-                    otherMobCount = util::DivideCeil(other.mipLayouts[otherLevel].dimensions.depth, static_cast<u32>(other.mipLayouts[otherLevel].blockDepth));
+                    srcRobWidthBlocks = util::DivideCeil(other.mipLayouts[srcLevel].dimensions.width, 64U);
+                    srcAlignedRobWidthBlocks = util::AlignUp(srcRobWidthBlocks, other.tileConfig.sparseBlockWidth);
+                    srcRobCount = util::DivideCeil(other.mipLayouts[srcLevel].dimensions.height, 8U * static_cast<u32>(other.mipLayouts[srcLevel].blockHeight));
+                    srcMobCount = util::DivideCeil(other.mipLayouts[srcLevel].dimensions.depth, static_cast<u32>(other.mipLayouts[srcLevel].blockDepth));
 
                     if (inMipOffset) {
                         if (flip) {
-                            currentMob = inMipOffset / (blockSize * alignedRobWidthBlocks * robCount);
-                            inMipOffset = inMipOffset % (blockSize * alignedRobWidthBlocks * robCount);
+                            dstMob = inMipOffset / (dstBlockSize * dstAlignedRobWidthBlocks * dstRobCount);
+                            inMipOffset = inMipOffset % (dstBlockSize * dstAlignedRobWidthBlocks * dstRobCount);
 
-                            currentRob = inMipOffset / (blockSize * alignedRobWidthBlocks);
-                            inMipOffset = inMipOffset % (blockSize * alignedRobWidthBlocks);
+                            dstRob = inMipOffset / (dstBlockSize * dstAlignedRobWidthBlocks);
+                            inMipOffset = inMipOffset % (dstBlockSize * dstAlignedRobWidthBlocks);
 
-                            currentBlock = inMipOffset / blockSize;
-                            inMipOffset = inMipOffset % blockSize;
+                            dstBlock = inMipOffset / dstBlockSize;
+                            inMipOffset = inMipOffset % dstBlockSize;
 
-                            currentSlice = inMipOffset / sliceSize;
-                            inMipOffset = inMipOffset % sliceSize;
+                            dstSlice = inMipOffset / dstSliceSize;
+                            inMipOffset = inMipOffset % dstSliceSize;
 
-                            currentGob = inMipOffset / (64U * 8U);
+                            dstGob = inMipOffset / (64U * 8U);
 
-                            imageOffset.x = static_cast<i32>(currentBlock * gobExtent.width);
-                            imageOffset.y = static_cast<i32>((currentRob * mipLayouts[level].blockHeight) + (currentGob * 8U));
-                            imageOffset.z = static_cast<i32>((currentMob * mipLayouts[level].blockDepth) + currentSlice);
+                            dstImageOffset.x = static_cast<i32>(dstBlock * dstGobExtent.width);
+                            dstImageOffset.y = static_cast<i32>((dstRob * mipLayouts[dstLevel].blockHeight) + (dstGob * 8U));
+                            dstImageOffset.z = static_cast<i32>((dstMob * mipLayouts[dstLevel].blockDepth) + dstSlice);
                         } else {
-                            otherCurrentMob = inMipOffset / (otherBlockSize * otherAlignedRobWidthBlocks * otherRobCount);
-                            inMipOffset = inMipOffset % (otherBlockSize * otherAlignedRobWidthBlocks * otherRobCount);
+                            srcMob = inMipOffset / (srcBlockSize * srcAlignedRobWidthBlocks * srcRobCount);
+                            inMipOffset = inMipOffset % (srcBlockSize * srcAlignedRobWidthBlocks * srcRobCount);
 
-                            otherCurrentRob = inMipOffset / (otherBlockSize * otherAlignedRobWidthBlocks);
-                            inMipOffset = inMipOffset % (otherBlockSize * otherAlignedRobWidthBlocks);
+                            srcRob = inMipOffset / (srcBlockSize * srcAlignedRobWidthBlocks);
+                            inMipOffset = inMipOffset % (srcBlockSize * srcAlignedRobWidthBlocks);
 
-                            otherCurrentBlock = inMipOffset / otherBlockSize;
-                            inMipOffset = inMipOffset % otherBlockSize;
+                            srcBlock = inMipOffset / srcBlockSize;
+                            inMipOffset = inMipOffset % srcBlockSize;
 
-                            otherCurrentSlice = inMipOffset / otherSliceSize;
-                            inMipOffset = inMipOffset % otherSliceSize;
+                            srcSlice = inMipOffset / srcSliceSize;
+                            inMipOffset = inMipOffset % srcSliceSize;
 
-                            otherCurrentGob = inMipOffset / (64U * 8U);
+                            srcGob = inMipOffset / (64U * 8U);
 
-                            otherImageOffset.x = static_cast<i32>(otherCurrentBlock * otherGobExtent.width);
-                            otherImageOffset.y = static_cast<i32>((otherCurrentRob * other.mipLayouts[otherLevel].blockHeight) + (otherCurrentGob * 8U));
-                            otherImageOffset.z = static_cast<i32>((otherCurrentMob * other.mipLayouts[otherLevel].blockDepth) + otherCurrentSlice);
+                            srcImageOffset.x = static_cast<i32>(srcBlock * srcGobExtent.width);
+                            srcImageOffset.y = static_cast<i32>((srcRob * other.mipLayouts[srcLevel].blockHeight) + (srcGob * 8U));
+                            srcImageOffset.z = static_cast<i32>((srcMob * other.mipLayouts[srcLevel].blockDepth) + srcSlice);
                         }
 
                         inMipOffset = 0;
                     }
 
-                    for (; currentMob < mobCount && otherCurrentMob < otherMobCount; ) {
-                        for (; currentRob < robCount && otherCurrentRob < otherRobCount; ) {
-                            for (; currentBlock < alignedRobWidthBlocks && otherCurrentBlock < otherAlignedRobWidthBlocks; ) {
-                                for (; currentSlice < mipLayouts[level].blockDepth && otherCurrentSlice < other.mipLayouts[otherLevel].blockDepth;) {
-                                    for (; currentGob < mipLayouts[level].blockHeight && otherCurrentGob < other.mipLayouts[otherLevel].blockHeight; ++currentGob, imageOffset.y += 8, ++otherCurrentGob, otherImageOffset.y += 8) {
-                                        if (currentBlock < robWidthBlocks && otherCurrentBlock < otherRobWidthBlocks && imageOffset.x < imageExtent.width && otherImageOffset.x < otherImageExtent.width) {
-                                            if (imageOffset.y < imageExtent.height && otherImageOffset.y < otherImageExtent.height) {
-                                                if (imageOffset.z < imageExtent.depth && otherImageOffset.z < otherImageExtent.depth) {
-                                                    texture::Dimensions minDim{std::min(std::min(other.mipLayouts[otherLevel].dimensions.width, static_cast<u32>(otherImageOffset.x) + 64U) - static_cast<u32>(otherImageOffset.x), std::min(mipLayouts[level].dimensions.width, static_cast<u32>(imageOffset.x) + 64U) - static_cast<u32>(imageOffset.x)),
-                                                                               std::min(std::min(otherImageExtent.height, static_cast<u32>(otherImageOffset.y) + otherGobExtent.height) - static_cast<u32>(otherImageOffset.y), std::min(imageExtent.height, static_cast<u32>(imageOffset.y) + gobExtent.height) - static_cast<u32>(imageOffset.y)),1};
+                    for (; dstMob < dstMobCount && srcMob < srcMobCount; ) {
+                        for (; dstRob < dstRobCount && srcRob < srcRobCount; ) {
+                            for (; dstBlock < dstAlignedRobWidthBlocks && srcBlock < srcAlignedRobWidthBlocks; ) {
+                                for (; dstSlice < mipLayouts[dstLevel].blockDepth && srcSlice < other.mipLayouts[srcLevel].blockDepth;) {
+                                    for (; dstGob < mipLayouts[dstLevel].blockHeight && srcGob < other.mipLayouts[srcLevel].blockHeight; ++dstGob, dstImageOffset.y += 8, ++srcGob, srcImageOffset.y += 8) {
+                                        if (dstBlock < dstRobWidthBlocks && srcBlock < srcRobWidthBlocks && dstImageOffset.x < imageExtent.width && srcImageOffset.x < otherImageExtent.width) {
+                                            if (dstImageOffset.y < imageExtent.height && srcImageOffset.y < otherImageExtent.height) {
+                                                if (dstImageOffset.z < imageExtent.depth && srcImageOffset.z < otherImageExtent.depth) {
+                                                    texture::Dimensions minDim{std::min(std::min(other.mipLayouts[srcLevel].dimensions.width, static_cast<u32>(srcImageOffset.x) + 64U) - static_cast<u32>(srcImageOffset.x), std::min(mipLayouts[dstLevel].dimensions.width, static_cast<u32>(dstImageOffset.x) + 64U) - static_cast<u32>(dstImageOffset.x)),
+                                                                               std::min(std::min(otherImageExtent.height, static_cast<u32>(srcImageOffset.y) + srcGobExtent.height) - static_cast<u32>(srcImageOffset.y), std::min(imageExtent.height, static_cast<u32>(dstImageOffset.y) + dstGobExtent.height) - static_cast<u32>(dstImageOffset.y)), 1};
 
                                                     results.toStaging.emplace_back(vk::BufferImageCopy{
                                                         .imageSubresource = {
                                                             .aspectMask = otherFormat->vkAspect,
                                                             .layerCount = 1,
-                                                            .mipLevel = otherLevel,
-                                                            .baseArrayLayer = otherLayer
+                                                            .mipLevel = srcLevel,
+                                                            .baseArrayLayer = srcLayer
                                                         },
-                                                        .imageExtent = {minDim.width / otherFormat->bpb, minDim.height, gobExtent.depth},
+                                                        .imageExtent = {minDim.width / otherFormat->bpb, minDim.height, dstGobExtent.depth},
                                                         .bufferOffset = results.stagingBufferSize,
-                                                        .imageOffset = otherImageOffset
+                                                        .imageOffset = srcImageOffset
                                                     });
                                                     results.fromStaging.emplace_back(vk::BufferImageCopy{
                                                         .imageSubresource = {
                                                             .aspectMask = format->vkAspect,
                                                             .layerCount = 1,
-                                                            .mipLevel = level,
-                                                            .baseArrayLayer = layer
+                                                            .mipLevel = dstLevel,
+                                                            .baseArrayLayer = dstLayer
                                                         },
-                                                        .imageExtent = {minDim.width / format->bpb, minDim.height, gobExtent.depth},
+                                                        .imageExtent = {minDim.width / format->bpb, minDim.height, dstGobExtent.depth},
                                                         .bufferOffset = results.stagingBufferSize,
-                                                        .imageOffset = imageOffset
+                                                        .imageOffset = dstImageOffset
                                                     });
 
                                                     results.stagingBufferSize += 64U * 8U;
@@ -384,87 +384,87 @@ namespace skyline::gpu {
                                         }
                                     }
 
-                                    if (currentGob == mipLayouts[level].blockHeight) {
-                                        imageOffset.y -= static_cast<i32>(mipLayouts[level].blockHeight) * 8;
-                                        imageOffset.z += 1;
-                                        currentGob = 0;
-                                        ++currentSlice;
+                                    if (dstGob == mipLayouts[dstLevel].blockHeight) {
+                                        dstImageOffset.y -= static_cast<i32>(mipLayouts[dstLevel].blockHeight) * 8;
+                                        dstImageOffset.z += 1;
+                                        dstGob = 0;
+                                        ++dstSlice;
                                     }
-                                    if (otherCurrentGob == other.mipLayouts[otherLevel].blockHeight) {
-                                        otherImageOffset.y -= static_cast<i32>(other.mipLayouts[otherLevel].blockHeight) * 8;
-                                        otherImageOffset.z += 1;
-                                        otherCurrentGob = 0;
-                                        ++otherCurrentSlice;
+                                    if (srcGob == other.mipLayouts[srcLevel].blockHeight) {
+                                        srcImageOffset.y -= static_cast<i32>(other.mipLayouts[srcLevel].blockHeight) * 8;
+                                        srcImageOffset.z += 1;
+                                        srcGob = 0;
+                                        ++srcSlice;
                                     }
                                 }
 
-                                if (currentSlice == mipLayouts[level].blockDepth) {
-                                    imageOffset.z -= static_cast<i32>(mipLayouts[level].blockDepth);
-                                    currentSlice = 0;
-                                    imageOffset.x += 64;
-                                    ++currentBlock;
+                                if (dstSlice == mipLayouts[dstLevel].blockDepth) {
+                                    dstImageOffset.z -= static_cast<i32>(mipLayouts[dstLevel].blockDepth);
+                                    dstSlice = 0;
+                                    dstImageOffset.x += 64;
+                                    ++dstBlock;
                                 }
-                                if (otherCurrentSlice == other.mipLayouts[otherLevel].blockDepth) {
-                                    otherImageOffset.z -= static_cast<i32>(other.mipLayouts[otherLevel].blockDepth);
-                                    otherCurrentSlice = 0;
-                                    otherImageOffset.x += 64;
-                                    ++otherCurrentBlock;
+                                if (srcSlice == other.mipLayouts[srcLevel].blockDepth) {
+                                    srcImageOffset.z -= static_cast<i32>(other.mipLayouts[srcLevel].blockDepth);
+                                    srcSlice = 0;
+                                    srcImageOffset.x += 64;
+                                    ++srcBlock;
                                 }
                             }
 
-                            if (currentBlock == alignedRobWidthBlocks) {
-                                imageOffset.x = 0;
-                                currentBlock = 0;
-                                imageOffset.y += static_cast<i32>(mipLayouts[level].blockHeight) * 8;
-                                ++currentRob;
+                            if (dstBlock == dstAlignedRobWidthBlocks) {
+                                dstImageOffset.x = 0;
+                                dstBlock = 0;
+                                dstImageOffset.y += static_cast<i32>(mipLayouts[dstLevel].blockHeight) * 8;
+                                ++dstRob;
                             }
-                            if (otherCurrentBlock == otherAlignedRobWidthBlocks) {
-                                otherImageOffset.x = 0;
-                                otherCurrentBlock = 0;
-                                otherImageOffset.y += static_cast<i32>(other.mipLayouts[otherLevel].blockHeight) * 8;
-                                ++otherCurrentRob;
+                            if (srcBlock == srcAlignedRobWidthBlocks) {
+                                srcImageOffset.x = 0;
+                                srcBlock = 0;
+                                srcImageOffset.y += static_cast<i32>(other.mipLayouts[srcLevel].blockHeight) * 8;
+                                ++srcRob;
                             }
                         }
 
-                        if (currentRob == robCount) {
-                            imageOffset.y = 0;
-                            currentRob = 0;
-                            imageOffset.z += static_cast<i32>(mipLayouts[level].blockDepth);
-                            ++currentMob;
+                        if (dstRob == dstRobCount) {
+                            dstImageOffset.y = 0;
+                            dstRob = 0;
+                            dstImageOffset.z += static_cast<i32>(mipLayouts[dstLevel].blockDepth);
+                            ++dstMob;
                         }
-                        if (otherCurrentRob == otherRobCount) {
-                            otherImageOffset.y = 0;
-                            otherCurrentRob = 0;
-                            otherImageOffset.z += static_cast<i32>(other.mipLayouts[otherLevel].blockDepth);
-                            ++otherCurrentMob;
+                        if (srcRob == srcRobCount) {
+                            srcImageOffset.y = 0;
+                            srcRob = 0;
+                            srcImageOffset.z += static_cast<i32>(other.mipLayouts[srcLevel].blockDepth);
+                            ++srcMob;
                         }
                     }
 
-                    if (currentMob == mobCount) {
-                        imageOffset = vk::Offset3D{};
-                        currentMob = 0;
-                        ++level;
+                    if (dstMob == dstMobCount) {
+                        dstImageOffset = vk::Offset3D{};
+                        dstMob = 0;
+                        ++dstLevel;
 
-                        if (level != levelCount)
+                        if (dstLevel != levelCount)
                             LOGW("Level offsets are unimplemented");
                     }
-                    if (otherCurrentMob == otherMobCount) {
-                        otherImageOffset = vk::Offset3D{};
-                        otherCurrentMob = 0;
-                        ++otherLevel;
+                    if (srcMob == srcMobCount) {
+                        srcImageOffset = vk::Offset3D{};
+                        srcMob = 0;
+                        ++srcLevel;
 
-                        if (otherLevel != other.levelCount)
+                        if (srcLevel != other.levelCount)
                             LOGW("Other Level offsets are unimplemented");
                     }
                 }
 
-                if (level == levelCount) {
-                    level = 0;
-                    ++layer;
+                if (dstLevel == levelCount) {
+                    dstLevel = 0;
+                    ++dstLayer;
                 }
-                if (otherLevel == other.levelCount) {
-                    otherLevel = 0;
-                    ++otherLayer;
+                if (srcLevel == other.levelCount) {
+                    srcLevel = 0;
+                    ++srcLayer;
                 }
             }
 
