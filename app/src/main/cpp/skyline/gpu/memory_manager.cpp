@@ -174,10 +174,10 @@ namespace skyline::gpu::memory {
     }
 
     ImportedBuffer MemoryManager::ImportBuffer(span<u8> cpuMapping) {
-        if (!gpu.traits.supportsAdrenoDirectMemoryImport)
+        if (!gpu.traits.supportsAdrenoDirectMemoryImport) [[unlikely]]
             throw exception("Cannot import host buffers without adrenotools import support!");
 
-        if (!adrenotools_import_user_mem(&gpu.adrenotoolsImportMapping, cpuMapping.data(), cpuMapping.size()))
+        if (!adrenotools_import_user_mem(gpu.adrenotoolsImportMapping, cpuMapping.data(), cpuMapping.size())) [[unlikely]]
             throw exception("Failed to import user memory");
 
         auto buffer{gpu.vkDevice.createBuffer(vk::BufferCreateInfo{
@@ -193,7 +193,7 @@ namespace skyline::gpu::memory {
             .memoryTypeIndex = gpu.traits.hostVisibleCoherentCachedMemoryType,
         })};
 
-        if (!adrenotools_validate_gpu_mapping(&gpu.adrenotoolsImportMapping))
+        if (!adrenotools_validate_gpu_mapping(gpu.adrenotoolsImportMapping)) [[unlikely]]
             throw exception("Failed to validate GPU mapping");
 
         gpu.vkDevice.bindBufferMemory2({vk::BindBufferMemoryInfo{

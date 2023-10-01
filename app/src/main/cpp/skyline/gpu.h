@@ -39,7 +39,7 @@ namespace skyline::gpu {
         friend TextureUsageTracker;
 
       public:
-        adrenotools_gpu_mapping adrenotoolsImportMapping{}; //!< Persistent struct to store active adrenotools mapping import info
+        void *adrenotoolsImportMapping; //!< Persistent pointer for adrenotools to store mapping import info
         vk::raii::Context vkContext;
         vk::raii::Instance vkInstance;
         vk::raii::DebugReportCallbackEXT vkDebugReportCallback; //!< An RAII Vulkan debug report manager which calls into 'GPU::DebugCallback'

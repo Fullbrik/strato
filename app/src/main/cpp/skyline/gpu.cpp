@@ -226,7 +226,7 @@ namespace skyline::gpu {
                                          const vk::raii::PhysicalDevice &physicalDevice,
                                          decltype(vk::DeviceQueueCreateInfo::queueCount) &vkQueueFamilyIndex,
                                          TraitManager &traits,
-                                         adrenotools_gpu_mapping *mapping) {
+                                         void **handle) {
         auto deviceFeatures2{physicalDevice.getFeatures2<
             vk::PhysicalDeviceFeatures2,
             vk::PhysicalDeviceCustomBorderColorFeaturesEXT,
@@ -281,7 +281,7 @@ namespace skyline::gpu {
             vk::PhysicalDeviceSubgroupProperties>()};
 
         traits = TraitManager{deviceFeatures2, enabledFeatures2, deviceExtensions, enabledExtensions, deviceProperties2, physicalDevice};
-        traits.ApplyDriverPatches(context, mapping);
+        traits.ApplyDriverPatches(context, handle);
 
         std::vector<const char *> pEnabledExtensions;
         pEnabledExtensions.reserve(enabledExtensions.size());
@@ -342,7 +342,7 @@ namespace skyline::gpu {
         });
     }
 
-    static PFN_vkGetInstanceProcAddr LoadVulkanDriver(const DeviceState &state, adrenotools_gpu_mapping *mapping) {
+    static PFN_vkGetInstanceProcAddr LoadVulkanDriver(const DeviceState &state, void **handle) {
         void *libvulkanHandle{};
 
         // If the user has selected a custom driver, try to load it
@@ -355,7 +355,7 @@ namespace skyline::gpu {
                 (state.os->privateAppFilesPath + "gpu_drivers/" + *state.settings->gpuDriver + "/").c_str(),
                 (*state.settings->gpuDriverLibraryName).c_str(),
                 (state.os->publicAppFilesPath + "gpu/vk_file_redirect/").c_str(),
-                mapping
+                handle
             );
 
             if (!libvulkanHandle) {
@@ -373,7 +373,7 @@ namespace skyline::gpu {
                 nullptr,
                 nullptr,
                 (state.os->publicAppFilesPath + "gpu/vk_file_redirect/").c_str(),
-                mapping
+                handle
             );
 
             if (!libvulkanHandle) {
