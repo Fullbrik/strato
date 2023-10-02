@@ -282,7 +282,7 @@ namespace skyline::gpu {
 
             for (; dstLayer < layerCount && srcLayer < other.layerCount;) {
                 for (; dstLevel < levelCount && srcLevel < other.levelCount;) {
-                    vk::Extent3D imageExtent{mipLayouts[dstLevel].dimensions.width / format->bpb, mipLayouts[dstLevel].dimensions.height, mipLayouts[dstLevel].dimensions.depth};
+                    texture::Dimensions &dstImageExtent{mipLayouts[dstLevel].dimensions}; //!< The dimensions of the destination texture in bytes
 
                     dstSliceSize = 64U * 8U * static_cast<u32>(mipLayouts[dstLevel].blockHeight);
                     dstBlockSize = dstSliceSize * static_cast<u32>(mipLayouts[dstLevel].blockDepth);
@@ -292,7 +292,7 @@ namespace skyline::gpu {
                     dstRobCount = util::DivideCeil(mipLayouts[dstLevel].dimensions.height, 8U * static_cast<u32>(mipLayouts[dstLevel].blockHeight));
                     dstMobCount = util::DivideCeil(mipLayouts[dstLevel].dimensions.depth, static_cast<u32>(mipLayouts[dstLevel].blockDepth));
 
-                    vk::Extent3D otherImageExtent{other.mipLayouts[srcLevel].dimensions.width / otherFormat->bpb, other.mipLayouts[srcLevel].dimensions.height, other.mipLayouts[srcLevel].dimensions.depth};
+                    texture::Dimensions &srcImageExtent{other.mipLayouts[srcLevel].dimensions}; //!< The dimensions of the source texture in bytes
 
                     srcSliceSize = 64U * 8U * static_cast<u32>(other.mipLayouts[srcLevel].blockHeight);
                     srcBlockSize = srcSliceSize * static_cast<u32>(other.mipLayouts[srcLevel].blockDepth);
@@ -318,7 +318,7 @@ namespace skyline::gpu {
 
                             dstGob = inMipOffset / (64U * 8U);
 
-                            dstImageOffset.x = static_cast<i32>(dstBlock * dstGobExtent.width);
+                            dstImageOffset.x = static_cast<i32>(dstBlock * 64);
                             dstImageOffset.y = static_cast<i32>((dstRob * mipLayouts[dstLevel].blockHeight) + (dstGob * 8U));
                             dstImageOffset.z = static_cast<i32>((dstMob * mipLayouts[dstLevel].blockDepth) + dstSlice);
                         } else {
@@ -336,7 +336,7 @@ namespace skyline::gpu {
 
                             srcGob = inMipOffset / (64U * 8U);
 
-                            srcImageOffset.x = static_cast<i32>(srcBlock * srcGobExtent.width);
+                            srcImageOffset.x = static_cast<i32>(srcBlock * 64);
                             srcImageOffset.y = static_cast<i32>((srcRob * other.mipLayouts[srcLevel].blockHeight) + (srcGob * 8U));
                             srcImageOffset.z = static_cast<i32>((srcMob * other.mipLayouts[srcLevel].blockDepth) + srcSlice);
                         }
@@ -349,11 +349,11 @@ namespace skyline::gpu {
                             for (; dstBlock < dstAlignedRobWidthBlocks && srcBlock < srcAlignedRobWidthBlocks; ) {
                                 for (; dstSlice < mipLayouts[dstLevel].blockDepth && srcSlice < other.mipLayouts[srcLevel].blockDepth;) {
                                     for (; dstGob < mipLayouts[dstLevel].blockHeight && srcGob < other.mipLayouts[srcLevel].blockHeight; ++dstGob, dstImageOffset.y += 8, ++srcGob, srcImageOffset.y += 8) {
-                                        if (dstBlock < dstRobWidthBlocks && srcBlock < srcRobWidthBlocks && dstImageOffset.x < imageExtent.width && srcImageOffset.x < otherImageExtent.width) {
-                                            if (dstImageOffset.y < imageExtent.height && srcImageOffset.y < otherImageExtent.height) {
-                                                if (dstImageOffset.z < imageExtent.depth && srcImageOffset.z < otherImageExtent.depth) {
-                                                    texture::Dimensions minDim{std::min(std::min(other.mipLayouts[srcLevel].dimensions.width, static_cast<u32>(srcImageOffset.x) + 64U) - static_cast<u32>(srcImageOffset.x), std::min(mipLayouts[dstLevel].dimensions.width, static_cast<u32>(dstImageOffset.x) + 64U) - static_cast<u32>(dstImageOffset.x)),
-                                                                               std::min(std::min(otherImageExtent.height, static_cast<u32>(srcImageOffset.y) + srcGobExtent.height) - static_cast<u32>(srcImageOffset.y), std::min(imageExtent.height, static_cast<u32>(dstImageOffset.y) + dstGobExtent.height) - static_cast<u32>(dstImageOffset.y)), 1};
+                                        if (dstBlock < dstRobWidthBlocks && srcBlock < srcRobWidthBlocks && dstImageOffset.x < dstImageExtent.width && srcImageOffset.x < srcImageExtent.width) {
+                                            if (dstImageOffset.y < dstImageExtent.height && srcImageOffset.y < srcImageExtent.height) {
+                                                if (dstImageOffset.z < dstImageExtent.depth && srcImageOffset.z < srcImageExtent.depth) {
+                                                    texture::Dimensions minDim{std::min(std::min(srcImageExtent.width, static_cast<u32>(srcImageOffset.x) + 64U) - static_cast<u32>(srcImageOffset.x), std::min(dstImageExtent.width, static_cast<u32>(dstImageOffset.x) + 64U) - static_cast<u32>(dstImageOffset.x)),
+                                                                               std::min(std::min(srcImageExtent.height, static_cast<u32>(srcImageOffset.y) + srcGobExtent.height) - static_cast<u32>(srcImageOffset.y), std::min(dstImageExtent.height, static_cast<u32>(dstImageOffset.y) + dstGobExtent.height) - static_cast<u32>(dstImageOffset.y)), 1};
 
                                                     results.toStaging.emplace_back(vk::BufferImageCopy{
                                                         .imageSubresource = {
@@ -362,9 +362,9 @@ namespace skyline::gpu {
                                                             .mipLevel = srcLevel,
                                                             .baseArrayLayer = srcLayer
                                                         },
-                                                        .imageExtent = {minDim.width / otherFormat->bpb, minDim.height, dstGobExtent.depth},
+                                                        .imageExtent = {minDim.width / otherFormat->bpb, minDim.height, srcGobExtent.depth},
                                                         .bufferOffset = results.stagingBufferSize,
-                                                        .imageOffset = srcImageOffset
+                                                        .imageOffset = {srcImageOffset.x / otherFormat->bpb, srcImageOffset.y, srcImageOffset.z}
                                                     });
                                                     results.fromStaging.emplace_back(vk::BufferImageCopy{
                                                         .imageSubresource = {
@@ -375,7 +375,7 @@ namespace skyline::gpu {
                                                         },
                                                         .imageExtent = {minDim.width / format->bpb, minDim.height, dstGobExtent.depth},
                                                         .bufferOffset = results.stagingBufferSize,
-                                                        .imageOffset = dstImageOffset
+                                                        .imageOffset = {dstImageOffset.x / format->bpb, dstImageOffset.y, dstImageOffset.z}
                                                     });
 
                                                     results.stagingBufferSize += 64U * 8U;

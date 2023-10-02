@@ -59,7 +59,7 @@ namespace skyline::gpu {
             return it->second;
         }
 
-        if (DumpShaders) {
+        if constexpr (DumpShaders) {
             std::scoped_lock lock{dumpMutex};
 
             auto shaderPath{dumpPath / fmt::format("{:016X}{}", hash, spv ? ".spv" : "")};
@@ -134,10 +134,10 @@ namespace skyline::gpu {
         Shader::Settings::values = {
             #ifdef NDEBUG
             .renderer_debug = false,
-            .disable_shader_loop_safety_checks = true,
+            .disable_shader_loop_safety_checks = false,
             #else
             .renderer_debug = true,
-            .disable_shader_loop_safety_checks = false,
+            .disable_shader_loop_safety_checks = true,
             #endif
             .resolution_info = {
                 .active = false,
