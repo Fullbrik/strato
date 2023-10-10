@@ -159,7 +159,8 @@ namespace skyline::gpu {
 
             imageBarrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
             image.layout = imageBarrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
-            commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, imageBarrier);
+            imageBarrier.dstAccessMask = {};
+            commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eBottomOfPipe, {}, {}, {}, imageBarrier);
         }, span<vk::Semaphore>{acquireSemaphore}, span<vk::Semaphore>{presentSemaphore})};
         textureView->texture->AttachCycle(cycle);
         return cycle;
