@@ -134,7 +134,7 @@ namespace skyline::gpu {
                 .layerCount = 1
             };
 
-            if (textureView->format != swapchainFormat) {
+            if (textureView->format != hostSwapchainFormat) {
                 commandBuffer.blitImage(texture->GetImage(), texture->GetLayout(), image.vkImage, image.layout, vk::ImageBlit{
                     .srcSubresource = srcSubresourceLayers,
                     .srcOffsets = std::array<vk::Offset3D, 2>{
@@ -178,7 +178,7 @@ namespace skyline::gpu {
         std::unique_lock textureLock{*textureView};
 
         auto texture{textureView->texture->shared_from_this()}; // A shared_ptr to the texture is needed to keep it alive until the frame is presented
-        if (textureView->format != swapchainFormat || textureView->hostTexture->dimensions != swapchainExtent)
+        if (textureView->format != guestSwapchainFormat || textureView->hostTexture->dimensions != swapchainExtent)
             UpdateSwapchain(textureView->format, textureView->hostTexture->dimensions);
 
         int result;
@@ -209,10 +209,10 @@ namespace skyline::gpu {
                 throw exception("vkAcquireNextImageKHR returned an unhandled result '{}'", vk::to_string(vkNextImage.first));
         }
 
+        currentSlot.WaitTillAvailable();
+
         auto &swapchainImage{images.at(vkNextImage.second)};
         currentSlot.freeCycle = CopyIntoSwapchain(textureView, swapchainImage, *currentSlot.semaphore);
-
-        currentSlot.WaitTillAvailable();
 
         auto getMonotonicNsNow{[]() -> i64 {
             timespec time{};
@@ -253,6 +253,7 @@ namespace skyline::gpu {
         if (timestamp && (result = window->perform(window, NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP, timestamp))) [[unlikely]]
             throw exception("Setting the buffer timestamp to {} failed with {}", timestamp, result);
 
+        // TODO: Also remove this?
         u64 frameId{};
         if ((result = window->perform(window, NATIVE_WINDOW_GET_NEXT_FRAME_ID, &frameId))) [[unlikely]]
             throw exception("Retrieving the next frame's ID failed with {}", result);
@@ -276,6 +277,7 @@ namespace skyline::gpu {
                 return (((weight - 1) * previousAverage) + current) / weight;
             }}; //!< Modified moving average (https://en.wikipedia.org/wiki/Moving_average#Modified_moving_average)
 
+            // TODO: Remove setting the java stuff, it's not even being displayed
             i64 currentFrametime{timestamp - frameTimestamp};
             averageFrametimeNs = weightedAverage(sampleWeight, averageFrametimeNs, currentFrametime);
             AverageFrametimeMs = static_cast<jfloat>(averageFrametimeNs) / constant::NsInMillisecond;
@@ -359,7 +361,7 @@ namespace skyline::gpu {
 
         vk::Format vkFormat{*format};
         texture::Format underlyingFormat{format};
-        if (swapchainFormat != format) {
+        if (hostSwapchainFormat != format) {
             auto formats{gpu.vkPhysicalDevice.getSurfaceFormatsKHR(**vkSurface)};
             if (std::find(formats.begin(), formats.end(), vk::SurfaceFormatKHR{vkFormat, vk::ColorSpaceKHR::eSrgbNonlinear}) == formats.end()) {
                 LOGD("Surface doesn't support requested image format '{}' with colorspace '{}'", vk::to_string(vkFormat), vk::to_string(vk::ColorSpaceKHR::eSrgbNonlinear));
@@ -376,7 +378,6 @@ namespace skyline::gpu {
         if (std::find(modes.begin(), modes.end(), requestedMode) == modes.end()) [[unlikely]]
             throw exception("Swapchain doesn't support present mode: {}", vk::to_string(requestedMode));
 
-        vk::SwapchainKHR oldSwapchain{vkSwapchain.has_value() ? *vkSwapchain.value() : vk::SwapchainKHR{VK_NULL_HANDLE}};
         vkSwapchain.reset();
 
         vkSwapchain.emplace(gpu.vkDevice, vk::SwapchainCreateInfoKHR{
@@ -400,7 +401,8 @@ namespace skyline::gpu {
         for (size_t index{}; index < vkImages.size(); ++index)
             images[index].SetImage(vkImages[index]);
 
-        swapchainFormat = underlyingFormat;
+        guestSwapchainFormat = format;
+        hostSwapchainFormat = underlyingFormat;
         swapchainExtent = extent;
     }
 
@@ -424,12 +426,12 @@ namespace skyline::gpu {
                 throw exception("Vulkan Queue doesn't support presentation with surface");
             vkSurfaceCapabilities = gpu.vkPhysicalDevice.getSurfaceCapabilitiesKHR(**vkSurface);
 
-            if (swapchainExtent && swapchainFormat)
-                UpdateSwapchain(swapchainFormat, swapchainExtent);
+            if (swapchainExtent && hostSwapchainFormat)
+                UpdateSwapchain(hostSwapchainFormat, swapchainExtent);
 
-            if (window->common.magic != AndroidNativeWindowMagic)
+            if (window->common.magic != AndroidNativeWindowMagic) [[unlikely]]
                 throw exception("ANativeWindow* has unexpected magic: {} instead of {}", span(&window->common.magic, 1).as_string(true), span<const u8>(reinterpret_cast<const u8 *>(&AndroidNativeWindowMagic), sizeof(u32)).as_string(true));
-            if (window->common.version != sizeof(ANativeWindow))
+            if (window->common.version != sizeof(ANativeWindow)) [[unlikely]]
                 throw exception("ANativeWindow* has unexpected version: {} instead of {}", window->common.version, sizeof(ANativeWindow));
 
             int result;

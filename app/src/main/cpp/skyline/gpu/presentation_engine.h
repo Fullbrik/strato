@@ -38,7 +38,8 @@ namespace skyline::gpu {
         vk::SurfaceCapabilitiesKHR vkSurfaceCapabilities{}; //!< The capabilities of the current Vulkan Surface
 
         std::optional<vk::raii::SwapchainKHR> vkSwapchain; //!< The Vulkan swapchain and the properties associated with it
-        texture::Format swapchainFormat{}; //!< The image format of the textures in the current swapchain
+        texture::Format guestSwapchainFormat{}; //!< The image format of the guests swapchain
+        texture::Format hostSwapchainFormat{}; //!< The image format of the textures in the current swapchain
         texture::Dimensions swapchainExtent{}; //!< The extent of images in the current swapchain
 
         struct SwapchainImage {
