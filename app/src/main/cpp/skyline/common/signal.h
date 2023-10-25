@@ -78,15 +78,26 @@ namespace skyline::signal {
     using SignalHandler = void (*)(int, struct siginfo *, ucontext *, void **);
 
     /**
-     * @brief A wrapper around Sigaction to make it easy to set a sigaction signal handler for multiple signals and also allow for thread-local signal handlers
+     * @brief Sets signal handlers for the given signals coming from guest code, for the calling thread
      * @param function A sa_action callback with a pointer to the old TLS (If present) as the 4th argument
      * @param syscallRestart If a system call running during the signal will be seamlessly restarted or return an error (Corresponds to SA_RESTART)
      * @note If 'nullptr' is written into the 4th argument then the old TLS won't be restored or it'll be set to any non-null value written into it
      */
-    void SetSignalHandler(std::initializer_list<int> signals, SignalHandler function, bool syscallRestart = true);
+    void SetGuestSignalHandler(std::initializer_list<int> signals, SignalHandler function, bool syscallRestart = true);
 
-    inline void SetSignalHandler(std::initializer_list<int> signals, void (*function)(int, struct siginfo *, ucontext *), bool syscallRestart = true) {
-        SetSignalHandler(signals, reinterpret_cast<SignalHandler>(function), syscallRestart);
+    inline void SetGuestSignalHandler(std::initializer_list<int> signals, void (*function)(int, struct siginfo *, ucontext *), bool syscallRestart = true) {
+        SetGuestSignalHandler(signals, reinterpret_cast<SignalHandler>(function), syscallRestart);
+    }
+
+    /**
+     * @brief Sets signal handlers for the given signals coming from host code, for the calling thread
+     * @param function A sa_action callback, the fourth parameter is unused
+     * @param syscallRestart If a system call running during the signal will be seamlessly restarted or return an error (Corresponds to SA_RESTART)
+     */
+    void SetHostSignalHandler(std::initializer_list<int> signals, SignalHandler function, bool syscallRestart = true);
+
+    inline void SetHostSignalHandler(std::initializer_list<int> signals, void (*function)(int, struct siginfo *, ucontext *), bool syscallRestart = true) {
+        SetHostSignalHandler(signals, reinterpret_cast<SignalHandler>(function), syscallRestart);
     }
 
     /**

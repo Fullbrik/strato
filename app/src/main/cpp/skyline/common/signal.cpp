@@ -73,7 +73,7 @@ namespace skyline::signal {
                 "MOV LR, %x1\n\t"
                 "MOV FP, %x2\n\t" // The stack frame of the calling function should be set
                 "BR %x3"
-            : : "r"(frame + 1), "r"(frame->lr), "r"(frame->next), "r"(&ExceptionThrow));
+                : : "r"(frame + 1), "r"(frame->lr), "r"(frame->next), "r"(&ExceptionThrow));
 
             __builtin_unreachable();
         } else {
@@ -138,7 +138,7 @@ namespace skyline::signal {
         if (function) {
             int signal{static_cast<int>(this - DefaultSignalHandlers.data())};
 
-            struct sigaction oldAction;
+            struct sigaction oldAction{};
             Sigaction(signal, nullptr, &oldAction);
 
             struct sigaction action{
@@ -149,50 +149,94 @@ namespace skyline::signal {
         }
     }
 
-    thread_local std::array<SignalHandler, NSIG> ThreadSignalHandlers{};
+    thread_local std::array<SignalHandler, NSIG> ThreadGuestSignalHandlers{};
+    thread_local std::array<SignalHandler, NSIG> ThreadHostSignalHandlers{};
 
+    /**
+     * @brief The first stage handler runs before sigchain, it restores the host TLS and then calls the appropriate handler
+     */
     __attribute__((no_stack_protector)) // Stack protector stores data in TLS at the function epilogue and verifies it at the prolog, we cannot allow writes to guest TLS and may switch to an alternative TLS during the signal handler and have disabled the stack protector as a result
-    void ThreadSignalHandler(int signal, siginfo *info, ucontext *context) {
+    void FirstStageThreadSignalHandler(int signal, siginfo *info, ucontext *context) {
         void *tls{}; // The TLS value prior to being restored if it is
         if (TlsRestorer)
             tls = TlsRestorer();
 
-        auto handler{ThreadSignalHandlers.at(static_cast<size_t>(signal))};
-        if (handler) {
-            handler(signal, info, context, &tls);
-        } else {
-            auto defaultHandler{DefaultSignalHandlers.at(static_cast<size_t>(signal)).function};
-            if (defaultHandler)
-                defaultHandler(signal, info, context);
-        }
+        auto signum{static_cast<size_t>(signal)};
+        auto guestHandler{ThreadGuestSignalHandlers.at(signum)};
+
+        if (guestHandler && tls) // Use the guest handler only if the signal happened in guest code (tls was restored)
+            guestHandler(signal, info, context, &tls);
+        else if (auto defaultHandler{DefaultSignalHandlers.at(signum).function}) // Use the default handler (sigchain) if present, host handler will be called by it, if any
+            defaultHandler(signal, info, context);
+        else if (auto hostHandler{ThreadHostSignalHandlers.at(signum)}) // Otherwise use the host handler, if any
+            hostHandler(signal, info, context, &tls);
+        else [[unlikely]]
+            LOGWNF("Unhandled signal {}, PC: 0x{:x}, Fault address: 0x{:x}", signal, context->uc_mcontext.pc, context->uc_mcontext.fault_address);
 
         if (tls)
             asm volatile("MSR TPIDR_EL0, %x0"::"r"(tls));
     }
 
-    void SetSignalHandler(std::initializer_list<int> signals, SignalHandler function, bool syscallRestart) {
+    /**
+     * @brief The second stage signal handler calls the appropriate handler for the running thread
+     */
+    __attribute__((no_stack_protector))
+    void SecondStageThreadSignalHandler(int signal, siginfo *info, ucontext *context) {
+        void *tls{}; // Always nullptr as we don't restore the TLS for signals in host code
+        auto hostHandler{ThreadHostSignalHandlers.at(static_cast<size_t>(signal))};
+        if (hostHandler)
+            hostHandler(signal, info, context, &tls);
+    }
+
+    /**
+     * @brief Sets up dual-stage signal handling for the given signals, by running the first stage handler before sigchain, or falling back to the default handler which will run the second stage handler
+     */
+    void SetSignalHandler(std::initializer_list<int> signals, bool syscallRestart) {
         static std::array<std::once_flag, NSIG> signalHandlerOnce{};
 
-        struct sigaction action{
-            .sa_sigaction = reinterpret_cast<void (*)(int, siginfo *, void *)>(ThreadSignalHandler),
+        struct sigaction guestAction{
+            .sa_sigaction = reinterpret_cast<void (*)(int, siginfo *, void *)>(FirstStageThreadSignalHandler),
+            .sa_flags = SA_SIGINFO | SA_EXPOSE_TAGBITS | (syscallRestart ? SA_RESTART : 0) | SA_ONSTACK,
+        };
+
+        struct sigaction hostAction{
+            .sa_sigaction = reinterpret_cast<void (*)(int, siginfo *, void *)>(SecondStageThreadSignalHandler),
             .sa_flags = SA_SIGINFO | SA_EXPOSE_TAGBITS | (syscallRestart ? SA_RESTART : 0) | SA_ONSTACK,
         };
 
         for (int signal : signals) {
-            std::call_once(signalHandlerOnce[static_cast<size_t>(signal)], [signal, &action]() {
-                struct sigaction oldAction;
-                Sigaction(signal, &action, &oldAction);
+            std::call_once(signalHandlerOnce[static_cast<size_t>(signal)], [signal, &guestAction, &hostAction]() {
+                struct sigaction oldAction{};
+                // Set the first stage handler for signals in guest code before sigchain
+                Sigaction(signal, &guestAction, &oldAction);
                 if (oldAction.sa_flags) {
                     oldAction.sa_flags &= ~SA_UNSUPPORTED; // Mask out kernel not supporting old sigaction() bits
                     oldAction.sa_flags |= SA_SIGINFO | SA_EXPOSE_TAGBITS | SA_RESTART | SA_ONSTACK; // Intentionally ignore these flags for the comparison
-                    if (oldAction.sa_flags != (action.sa_flags | SA_RESTART))
-                        throw exception("Old sigaction flags aren't equivalent to the replaced signal: {:#b} | {:#b}", oldAction.sa_flags, action.sa_flags);
+                    if (oldAction.sa_flags != (guestAction.sa_flags | SA_RESTART))
+                        throw exception("Old sigaction flags aren't equivalent to the replaced signal: {:#b} | {:#b}", oldAction.sa_flags, guestAction.sa_flags);
                 }
 
                 DefaultSignalHandlers.at(static_cast<size_t>(signal)).function = (oldAction.sa_flags & SA_SIGINFO) ? oldAction.sa_sigaction : reinterpret_cast<void (*)(int, struct siginfo *, void *)>(oldAction.sa_handler);
+
+                // Set the second stage handler for signals in host code using bionic's sigaction
+                // We only need to set the second stage handler if the first stage handler overwrote a default handler
+                // Otherwise, the first stage handler will take care of calling the second stage one
+                if (DefaultSignalHandlers.at(static_cast<size_t>(signal)).function)
+                    sigaction(signal, &hostAction, nullptr);
             });
-            ThreadSignalHandlers.at(static_cast<size_t>(signal)) = function;
         }
+    }
+
+    void SetGuestSignalHandler(std::initializer_list<int> signals, SignalHandler function, bool syscallRestart) {
+        SetSignalHandler(signals, syscallRestart);
+        for (int signal : signals)
+            ThreadGuestSignalHandlers.at(static_cast<size_t>(signal)) = function;
+    }
+
+    void SetHostSignalHandler(std::initializer_list<int> signals, SignalHandler function, bool syscallRestart) {
+        SetSignalHandler(signals, syscallRestart);
+        for (int signal : signals)
+            ThreadHostSignalHandlers.at(static_cast<size_t>(signal)) = function;
     }
 
     void Sigprocmask(int how, const sigset_t &set, sigset_t *oldSet) {

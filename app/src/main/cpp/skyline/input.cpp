@@ -21,7 +21,7 @@ namespace skyline::input {
         AsyncLogger::UpdateTag();
 
         try {
-            signal::SetSignalHandler({SIGINT, SIGILL, SIGTRAP, SIGBUS, SIGFPE, SIGSEGV}, signal::ExceptionalSignalHandler);
+            signal::SetHostSignalHandler({SIGINT, SIGILL, SIGTRAP, SIGBUS, SIGFPE, SIGSEGV}, signal::ExceptionalSignalHandler);
 
             struct UpdateCallback {
                 std::chrono::milliseconds period;
