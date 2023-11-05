@@ -62,9 +62,12 @@ namespace skyline::gpu {
                 std::unique_lock lock{texture->userMutex};
                 std::unique_lock accessLock{texture->accessMutex};
                 bool shouldWait{};
-                for (auto &host : texture->hosts)
-                    if (host.dirtyState == DirtyState::HostDirty)
+                for (auto &host : texture->hosts) {
+                    if (host.dirtyState == DirtyState::HostDirty) {
                         shouldWait = true;
+                        break;
+                    }
+                }
 
                 if (shouldWait) {
                     // If this mutex would cause other callbacks to be blocked then we should block on this mutex in advance
@@ -198,13 +201,13 @@ namespace skyline::gpu {
 
         vk::ImageType imageType{HostTexture::ConvertViewType(info.viewType, info.imageDimensions)};
         for (auto &host : hosts) {
-            if (host.copyLayouts[actualBaseMip].dimensions == info.imageDimensions && host.imageType == imageType && host.sampleCount == info.sampleCount) {
+            if (host.guestMipLayouts[actualBaseMip].dimensions == info.imageDimensions && host.imageType == imageType && host.sampleCount == info.sampleCount) {
                 auto candidateFormat{info.viewFormat == host.guestFormat ? host.format : info.viewFormat}; // We want to use the texture's format if it isn't supplied or if the requested format matches the guest format then we want to use the host format just in case it's compressed
 
                 if ((host.usage & info.extraUsageFlags) != info.extraUsageFlags)
-                    continue; // If the host image lacks required usage flags then we can't use a view from it
+                    continue; // If the host image lacks required usage flags then we can't create/use a view from it
 
-                auto view{ranges::find_if(host.views, [&](HostTextureView *view) { return view->format == candidateFormat && view->type == info.viewType && view->range == viewRange && view->components == info.viewComponents; })};
+                auto view{std::ranges::find_if(host.views, [&](HostTextureView *view) { return view->format == candidateFormat && view->type == info.viewType && view->range == viewRange && view->components == info.viewComponents; })};
                 if (view != host.views.end())
                     return *view;
 
@@ -227,7 +230,7 @@ namespace skyline::gpu {
             info.imageDimensions = info.viewFormat->GetDimensionsFromBytes(hosts.front().format->GetDimensionsInBytes(hosts.front().dimensions));
 
         auto &newHost = hosts.emplace_back(*this, info, imageType, mutableFormat);
-        return createView(newHost, info.viewFormat, info.viewType, viewRange, info.viewComponents);
+        return createView(newHost, format::ConvertHostCompatibleFormat(info.viewFormat, gpu.traits), info.viewType, viewRange, info.viewComponents);
     }
 
     void Texture::WaitOnFence() {
@@ -269,8 +272,9 @@ namespace skyline::gpu {
         } else {
             if (toSync.dirtyState != DirtyState::GuestDirty) {
                 AttachCycle(gpu.scheduler.Submit([&](vk::raii::CommandBuffer &commandBuffer) {
-                    toSync.AccessForTransfer(commandBuffer, toSync.trackingInfo, false);
-                    toSync.trackingInfo.waitedStages |= vk::PipelineStageFlagBits::eTransfer;
+                    commandBuffer.pipelineBarrier(toSync.trackingInfo.lastUsedStage, waitStage, {}, {}, {},
+                        toSync.GetMemoryBarrier(toSync.trackingInfo.lastUsedAccessFlag, waitFlags));
+                    toSync.trackingInfo.waitedStages |= waitStage;
                 }));
                 WaitOnFence();
                 return;
@@ -284,39 +288,19 @@ namespace skyline::gpu {
         if (toSyncFrom) {
             auto downloadStagingBuffer = gpu.memory.AllocateStagingBuffer(toSyncFrom->copySize);
 
-            WaitOnFence();
-            auto lCycle{gpu.scheduler.Submit([&](vk::raii::CommandBuffer &commandBuffer) {
+            AttachCycle(gpu.scheduler.Submit([&](vk::raii::CommandBuffer &commandBuffer) {
                 if (toSync.layout == vk::ImageLayout::eUndefined)
-                    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eAllCommands, {}, {}, {}, vk::ImageMemoryBarrier{
-                        .image = toSync.backing.vkImage,
-                        .oldLayout = std::exchange(toSync.layout, vk::ImageLayout::eGeneral),
-                        .newLayout = toSync.layout,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .subresourceRange = {
-                            .aspectMask = toSync.format->vkAspect,
-                            .levelCount = guest.levelCount,
-                            .layerCount = guest.layerCount
-                        }
-                    });
-                else if (!(toSync.trackingInfo.waitedStages & vk::PipelineStageFlagBits::eTransfer)) {
-                    toSync.AccessForTransfer(commandBuffer, toSync.trackingInfo, true);
-                    toSync.trackingInfo.waitedStages |= vk::PipelineStageFlagBits::eTransfer;
+                    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eAllCommands, {}, {}, {},
+                        toSync.GetMemoryBarrier({}, vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite, std::exchange(toSync.layout, vk::ImageLayout::eGeneral), vk::ImageLayout::eGeneral));
+                else {
+                    commandBuffer.pipelineBarrier(toSync.trackingInfo.lastUsedStage | toSync.trackingInfo.waitedStages, vk::PipelineStageFlagBits::eTransfer, {}, {}, {},
+                        toSync.GetMemoryBarrier(toSync.trackingInfo.lastUsedAccessFlag, vk::AccessFlagBits::eTransferWrite));
                 }
 
-                if (!(toSyncFrom->trackingInfo.waitedStages & vk::PipelineStageFlagBits::eTransfer)) {
-                    toSyncFrom->AccessForTransfer(commandBuffer, toSyncFrom->trackingInfo, false);
-                    toSyncFrom->trackingInfo.waitedStages |= vk::PipelineStageFlagBits::eTransfer;
-                }
+                commandBuffer.pipelineBarrier(toSyncFrom->trackingInfo.lastUsedStage, vk::PipelineStageFlagBits::eTransfer, {}, {}, {},
+                                              toSyncFrom->GetMemoryBarrier(toSyncFrom->trackingInfo.lastUsedAccessFlag, vk::AccessFlagBits::eTransferRead));
+                toSyncFrom->trackingInfo.waitedStages |= vk::PipelineStageFlagBits::eTransfer;
 
-                commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, {}, vk::BufferMemoryBarrier{
-                    .buffer = downloadStagingBuffer->vkBuffer,
-                    .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-                    .dstAccessMask = vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite,
-                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .size = downloadStagingBuffer->size()
-                }, {});
                 toSyncFrom->CopyIntoStagingBuffer(commandBuffer, downloadStagingBuffer);
                 commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, {}, vk::BufferMemoryBarrier{
                     .buffer = downloadStagingBuffer->vkBuffer,
@@ -327,44 +311,40 @@ namespace skyline::gpu {
                     .size = downloadStagingBuffer->size()
                 }, {});
                 toSync.CopyFromStagingBuffer(commandBuffer, downloadStagingBuffer);
-            })};
-            toSyncFrom->trackingInfo.waitedStages |= vk::PipelineStageFlagBits::eTransfer;
-            lCycle->Wait(); // We block till the copy is complete
+
+                commandBuffer.pipelineBarrier(toSync.trackingInfo.lastUsedStage, waitStage, {}, {}, {},
+                                              toSync.GetMemoryBarrier(toSync.trackingInfo.lastUsedAccessFlag, waitFlags));
+                toSync.trackingInfo.waitedStages = waitStage;
+            }));
         } else {
             auto stagingBuffer{toSync.SynchronizeHostImpl()};
             if (stagingBuffer) {
-                WaitOnFence();
-                auto lCycle{gpu.scheduler.Submit([&](vk::raii::CommandBuffer &commandBuffer) {
+                AttachCycle(gpu.scheduler.Submit([&](vk::raii::CommandBuffer &commandBuffer) {
                     if (toSync.layout == vk::ImageLayout::eUndefined)
-                        commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eAllCommands, {}, {}, {}, vk::ImageMemoryBarrier{
-                            .image = toSync.backing.vkImage,
-                            .oldLayout = std::exchange(toSync.layout, vk::ImageLayout::eGeneral),
-                            .newLayout = toSync.layout,
-                            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                            .subresourceRange = {
-                                .aspectMask = toSync.format->vkAspect,
-                                .levelCount = guest.levelCount,
-                                .layerCount = guest.layerCount
-                            }
-                        });
-                    else if (!(toSync.trackingInfo.waitedStages & vk::PipelineStageFlagBits::eTransfer)) {
-                        toSync.AccessForTransfer(commandBuffer, toSync.trackingInfo, true);
-                        toSync.trackingInfo.waitedStages |= vk::PipelineStageFlagBits::eTransfer;
+                        commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eAllCommands, {}, {}, {},
+                            toSync.GetMemoryBarrier({}, vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite, std::exchange(toSync.layout, vk::ImageLayout::eGeneral), vk::ImageLayout::eGeneral));
+                    else {
+                        commandBuffer.pipelineBarrier(toSync.trackingInfo.lastUsedStage | toSync.trackingInfo.waitedStages, vk::PipelineStageFlagBits::eTransfer, {}, {}, {},
+                            toSync.GetMemoryBarrier(toSync.trackingInfo.lastUsedAccessFlag, vk::AccessFlagBits::eTransferWrite));
                     }
 
                     commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, {}, vk::BufferMemoryBarrier{
                         .buffer = stagingBuffer->vkBuffer,
                         .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-                        .dstAccessMask = vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite,
+                        .dstAccessMask = vk::AccessFlagBits::eTransferRead,
                         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                         .size = stagingBuffer->size()
                     }, {});
                     toSync.CopyFromStagingBuffer(commandBuffer, stagingBuffer);
-                })};
-                lCycle->Wait(); // We block till the copy is complete
+
+                    commandBuffer.pipelineBarrier(toSync.trackingInfo.lastUsedStage, waitStage, {}, {}, {},
+                        toSync.GetMemoryBarrier(toSync.trackingInfo.lastUsedAccessFlag, waitFlags));
+                    toSync.trackingInfo.waitedStages = waitStage;
+                }));
             }
+
+            WaitOnFence(); // We wait for the copy to complete
         }
     }
 
@@ -392,10 +372,10 @@ namespace skyline::gpu {
             }
         }
 
-        if (!toSyncFrom || toSyncFrom->format->vkAspect == (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)) // If state is already CPU dirty/Clean we don't need to do anything
+        if (!toSyncFrom || toSyncFrom->format->vkAspect == (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)) // If state is already CPU dirty/Clean we don't need to do anything and we don't implement downloading depthstencil textures
             return;
 
-        if (toSyncFrom->GetLayout() == vk::ImageLayout::eUndefined || toSyncFrom->needsDecompression) // We cannot sync the contents of an undefined texture and we don't support recompression of a decompressed texture
+        if (toSyncFrom->needsDecompression) // We don't support recompression of a decompressed texture
             return;
 
         gpu.textureUsageTracker.MarkClean(usageHandle);
@@ -403,12 +383,10 @@ namespace skyline::gpu {
         if (toSyncFrom->tiling == vk::ImageTiling::eOptimal) {
             auto tempStagingBuffer = gpu.memory.AllocateStagingBuffer(toSyncFrom->copySize);
 
-            WaitOnFence();
-            auto lCycle{gpu.scheduler.Submit([&](vk::raii::CommandBuffer &commandBuffer) {
-                if (!(toSyncFrom->trackingInfo.waitedStages & vk::PipelineStageFlagBits::eTransfer)) {
-                    toSyncFrom->AccessForTransfer(commandBuffer, toSyncFrom->trackingInfo, false);
-                    toSyncFrom->trackingInfo.waitedStages |= vk::PipelineStageFlagBits::eTransfer;
-                }
+            auto syncCycle{gpu.scheduler.Submit([&](vk::raii::CommandBuffer &commandBuffer) {
+                commandBuffer.pipelineBarrier(toSyncFrom->trackingInfo.lastUsedStage, vk::PipelineStageFlagBits::eTransfer, {}, {}, {},
+                    toSyncFrom->GetMemoryBarrier(toSyncFrom->trackingInfo.lastUsedAccessFlag, vk::AccessFlagBits::eTransferRead));
+                toSyncFrom->trackingInfo.waitedStages |= vk::PipelineStageFlagBits::eTransfer;
 
                 toSyncFrom->CopyIntoStagingBuffer(commandBuffer, tempStagingBuffer);
                 commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eHost, {}, {}, vk::BufferMemoryBarrier{
@@ -420,7 +398,8 @@ namespace skyline::gpu {
                     .size = tempStagingBuffer->size()
                 }, {});
             })};
-            lCycle->Wait(); // We block till the copy is complete
+            WaitOnFence(); // We block till the copy is complete
+            syncCycle->Wait();
 
             toSyncFrom->CopyToGuest(tempStagingBuffer->data());
         } else if (toSyncFrom->tiling == vk::ImageTiling::eLinear) {
@@ -435,27 +414,18 @@ namespace skyline::gpu {
     void Texture::OnExecStart(interconnect::CommandExecutor &executor) {
         std::unique_lock lock{accessMutex};
 
-        executor.InsertPreExecuteCommand([this](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &pCycle, GPU &) {
-            std::unique_lock lock{accessMutex};
-            for (auto &host : hosts) {
-                if (host.layout == vk::ImageLayout::eUndefined)
-                    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eAllCommands, {}, {}, {}, vk::ImageMemoryBarrier{
-                        .image = host.backing.vkImage,
-                        .oldLayout = std::exchange(host.layout, vk::ImageLayout::eGeneral),
-                        .newLayout = host.layout,
-                        .dstAccessMask = vk::AccessFlagBits::eMemoryWrite,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .subresourceRange = {
-                            .aspectMask = host.format->vkAspect,
-                            .levelCount = guest.levelCount,
-                            .layerCount = guest.layerCount,
-                        }
-                    });
+        std::vector<vk::ImageMemoryBarrier> imageBarriers{};
+        for (auto &host : hosts) {
+            if (host.layout == vk::ImageLayout::eUndefined) [[unlikely]]
+                imageBarriers.emplace_back(host.GetMemoryBarrier({}, vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite, std::exchange(host.layout, vk::ImageLayout::eGeneral), vk::ImageLayout::eGeneral));
 
-                host.UpdateRenderPassUsage(0, texture::RenderPassUsage::None);
-            }
-        });
+            host.UpdateRenderPassUsage(0, texture::RenderPassUsage::None);
+        }
+
+        if (!imageBarriers.empty())
+            executor.InsertPreExecuteCommand([imageBarriers](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &pCycle, GPU &) {
+                commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eAllCommands, {}, {}, {}, imageBarriers);
+            });
     }
 
     void Texture::OnExecEnd() {
@@ -463,7 +433,5 @@ namespace skyline::gpu {
 
         if (syncStagingBuffer)
             syncStagingBuffer = nullptr;
-
-        unlock();
     }
 }

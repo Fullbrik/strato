@@ -32,7 +32,6 @@ namespace skyline::gpu::interconnect {
             srcBuf.GetBuffer()->BlockAllCpuBackingWrites();
             dstBuf.GetBuffer()->BlockAllCpuBackingWrites();
 
-            // Holy shit this is inefficient
             executor.AddOutsideRpCommand([srcBuf, dstBuf](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &gpu) {
                 commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer, {}, vk::MemoryBarrier{
                     .srcAccessMask = vk::AccessFlagBits::eMemoryWrite,
@@ -55,7 +54,7 @@ namespace skyline::gpu::interconnect {
     }
 
     void MaxwellDma::Clear(span<u8> mapping, u32 value) {
-        if (!util::IsAligned(mapping.size(), 4))
+        if (!util::IsAligned(mapping.size(), 4)) [[unlikely]]
             throw exception("Cleared buffer's size is not aligned to 4 bytes!");
 
         auto clearBuf{gpu.buffer.FindOrCreate(mapping, executor.tag, [this](std::shared_ptr<Buffer> buffer, ContextLock<Buffer> &&lock) {

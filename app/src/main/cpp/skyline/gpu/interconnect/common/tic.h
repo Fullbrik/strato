@@ -248,12 +248,12 @@ namespace skyline::gpu::interconnect {
 
         // 0x04
         union Address {
-            //!< Pitch specific
+            // Pitch specific
             struct {
                 u8 reserved1A : 5;
                 u32 address31To5 : 27;
             };
-            //!< Blocklinear specific
+            // Blocklinear specific
             struct {
                 u8 reserved1Y : 5;
                 u8 gobDepthOffset : 2; //!< The offset of the texture in slices
@@ -278,9 +278,9 @@ namespace skyline::gpu::interconnect {
 
         // 0x0C
         union TileConfig {
-            //!< Pitch specific
+            // Pitch specific
             u16 pitch20To5;
-            //!< Blocklinear specific
+            // Blocklinear specific
             struct {
                 u8 gobsPerBlockWidthLog2 : 3;
                 u8 gobsPerBlockHeightLog2 : 3;

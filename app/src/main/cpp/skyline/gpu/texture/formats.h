@@ -4,6 +4,7 @@
 #pragma once
 
 #include "common.h"
+#include "gpu/trait_manager.h"
 
 namespace skyline::gpu::format {
     // @fmt:off
@@ -247,4 +248,49 @@ namespace skyline::gpu::format {
     #undef FORMAT_NORM_INT_FLOAT
 
     // @fmt:on
+
+    constexpr texture::Format ConvertHostCompatibleFormat(texture::Format format, const TraitManager &traits) {
+        auto &bcnSupport{traits.bcnSupport};
+        if (bcnSupport.all())
+            return format;
+
+        switch (format->vkFormat) {
+            case vk::Format::eBc1RgbaUnormBlock:
+                return bcnSupport[0] ? format : format::R8G8B8A8Unorm;
+            case vk::Format::eBc1RgbaSrgbBlock:
+                return bcnSupport[0] ? format : format::R8G8B8A8Srgb;
+
+            case vk::Format::eBc2UnormBlock:
+                return bcnSupport[1] ? format : format::R8G8B8A8Unorm;
+            case vk::Format::eBc2SrgbBlock:
+                return bcnSupport[1] ? format : format::R8G8B8A8Srgb;
+
+            case vk::Format::eBc3UnormBlock:
+                return bcnSupport[2] ? format : format::R8G8B8A8Unorm;
+            case vk::Format::eBc3SrgbBlock:
+                return bcnSupport[2] ? format : format::R8G8B8A8Srgb;
+
+            case vk::Format::eBc4UnormBlock:
+                return bcnSupport[3] ? format : format::R8Unorm;
+            case vk::Format::eBc4SnormBlock:
+                return bcnSupport[3] ? format : format::R8Snorm;
+
+            case vk::Format::eBc5UnormBlock:
+                return bcnSupport[4] ? format : format::R8G8Unorm;
+            case vk::Format::eBc5SnormBlock:
+                return bcnSupport[4] ? format : format::R8G8Snorm;
+
+            case vk::Format::eBc6HUfloatBlock:
+            case vk::Format::eBc6HSfloatBlock:
+                return bcnSupport[5] ? format : format::R16G16B16A16Float; // This is a signed 16-bit FP format, we don't have an unsigned 16-bit FP format
+
+            case vk::Format::eBc7UnormBlock:
+                return bcnSupport[6] ? format : format::R8G8B8A8Unorm;
+            case vk::Format::eBc7SrgbBlock:
+                return bcnSupport[6] ? format : format::R8G8B8A8Srgb;
+
+            default:
+                return format;
+        }
+    }
 }

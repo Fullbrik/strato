@@ -24,7 +24,7 @@ namespace skyline::gpu {
         enum class TileMode {
             Linear, //!< All pixels are arranged linearly
             Pitch,  //!< All pixels are arranged linearly but rows aligned to the pitch
-            Block,  //!< All pixels are arranged into blocks and swizzled in a Z-order curve to optimize for spacial locality
+            Block  //!< All pixels are arranged into blocks and swizzled in a Z-order curve to optimize for spacial locality
         };
 
         /**

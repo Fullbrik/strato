@@ -80,7 +80,7 @@ namespace skyline::kernel::svc {
 
         state.process->memory.SetRegionPermission(span<u8>(address, size), newPermission);
 
-        LOGD("Set permission to {}{}{} at {} - {} (0x{:X} bytes)", newPermission.r ? 'R' : '-', newPermission.w ? 'W' : '-', newPermission.x ? 'X' : '-', fmt::ptr(address), fmt::ptr(address + size), size);
+        LOGD("Set permission to {} at {} - {} (0x{:X} bytes)", newPermission, fmt::ptr(address), fmt::ptr(address + size), size);
         state.ctx->gpr.w0 = Result{};
     }
 
@@ -276,12 +276,12 @@ namespace skyline::kernel::svc {
 
         auto thread{state.process->CreateThread(entry, entryArgument, stackTop, priority, static_cast<u8>(idealCore))};
         if (thread) {
-            LOGD("Created thread #{} with handle 0x{:X} (Entry Point: {}, Argument: 0x{:X}, Stack Pointer: {}, Priority: {}, Ideal Core: {})", thread->id, thread->handle, entry, entryArgument, fmt::ptr(stackTop), priority, idealCore);
+            LOGD("Created thread #{} with handle 0x{:X} (Entry Point: {}, Argument: 0x{:X}, Stack Pointer: {}, Priority: {}, Ideal Core: {})", thread->id, thread->handle, fmt::ptr(entry), entryArgument, fmt::ptr(stackTop), priority, idealCore);
 
             state.ctx->gpr.w1 = thread->handle;
             state.ctx->gpr.w0 = Result{};
         } else {
-            LOGD("Cannot create thread (Entry Point: {}, Argument: 0x{:X}, Stack Pointer: {}, Priority: {}, Ideal Core: {})", entry, entryArgument, fmt::ptr(stackTop), priority, idealCore);
+            LOGD("Cannot create thread (Entry Point: {}, Argument: 0x{:X}, Stack Pointer: {}, Priority: {}, Ideal Core: {})", fmt::ptr(entry), entryArgument, fmt::ptr(stackTop), priority, idealCore);
             state.ctx->gpr.w1 = 0;
             state.ctx->gpr.w0 = result::OutOfResource;
         }
@@ -527,7 +527,7 @@ namespace skyline::kernel::svc {
                 return;
             }
 
-            LOGD("Mapping shared memory (0x{:X}) at {} - {} (0x{:X} bytes), with permissions: ({}{}{})", handle, fmt::ptr(address), fmt::ptr(address + size), size, permission.r ? 'R' : '-', permission.w ? 'W' : '-', permission.x ? 'X' : '-');
+            LOGD("Mapping shared memory (0x{:X}) at {} - {} (0x{:X} bytes), with permissions: ({})", handle, fmt::ptr(address), fmt::ptr(address + size), size, permission);
 
             object->Map(span<u8>{address, size}, permission);
             state.process->memory.AddRef(object);
@@ -610,7 +610,7 @@ namespace skyline::kernel::svc {
             return;
         }
 
-        LOGD("Creating transfer memory (0x{:X}) at {} - {} (0x{:X} bytes) ({}{}{})", tmem.handle, fmt::ptr(address), fmt::ptr(address + size), size, permission.r ? 'R' : '-', permission.w ? 'W' : '-', permission.x ? 'X' : '-');
+        LOGD("Creating transfer memory (0x{:X}) at {} - {} (0x{:X} bytes) ({})", tmem.handle, fmt::ptr(address), fmt::ptr(address + size), size, permission);
 
         state.ctx->gpr.w0 = Result{};
         state.ctx->gpr.w1 = tmem.handle;

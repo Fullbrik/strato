@@ -14,8 +14,8 @@ namespace skyline::gpu {
             case util::Hash(name):                                                                           \
                 if (cond) {                                                                                  \
                     if (name == extensionName) {                                                             \
-                            property = true;                                                                 \
-                            enabledExtensions.push_back(std::array<char, VK_MAX_EXTENSION_NAME_SIZE>{name}); \
+                        property = true;                                                                     \
+                        enabledExtensions.push_back(std::array<char, VK_MAX_EXTENSION_NAME_SIZE>{name});     \
                     }                                                                                        \
                 }                                                                                            \
                 break

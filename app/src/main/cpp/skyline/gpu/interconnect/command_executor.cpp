@@ -328,74 +328,115 @@ namespace skyline::gpu::interconnect {
         allocator = &slot->allocator;
     }
 
-    bool CommandExecutor::CreateRenderPassWithAttachments(vk::Rect2D renderArea, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, span<HostTextureView *> colorAttachments, TextureSyncRequestArgs colorAttachmentSync, std::pair<HostTextureView *, TextureSyncRequestArgs> depthStencilAttachment, vk::PipelineStageFlags srcStageMask, vk::PipelineStageFlags dstStageMask) {
-        span<HostTextureView *> otherDSASpan{depthStencilAttachment.first ?depthStencilAttachment.first : span<HostTextureView *>{}};
-        span<std::pair<HostTextureView *, TextureSyncRequestArgs>> depthStencilAttachmentSpan{depthStencilAttachment.first ? span<std::pair<HostTextureView *, TextureSyncRequestArgs>>(depthStencilAttachment) : span<std::pair<HostTextureView *, TextureSyncRequestArgs>>()};
-        auto outputAttachmentViews{ranges::views::concat(colorAttachments, otherDSASpan)};
+    struct SyncInfo {
+        HostTextureView *view;
+        TextureSyncRequestArgs args;
+        texture::RenderPassUsage usage;
+    };
+
+    bool CommandExecutor::CreateRenderPassWithAttachments(vk::Rect2D renderArea, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, span<HostTextureView *> colorAttachments, HostTextureView *depthStencilAttachment, vk::PipelineStageFlags srcStageMask, vk::PipelineStageFlags dstStageMask) {
+        span<HostTextureView *> depthStencilAttachmentSpan{depthStencilAttachment ? depthStencilAttachment : span<HostTextureView *>{}};
+        auto outputAttachmentViews{ranges::views::concat(colorAttachments, depthStencilAttachmentSpan)};
+
+        std::vector<SyncInfo> allImages{};
+        allImages.reserve(sampledImages.size() + colorAttachments.size() + (depthStencilAttachment ? 1U : 0U));
+
+        auto addOrMergeImage{[&allImages](SyncInfo info){
+            for (auto &image : allImages) {
+                if (image.view->hostTexture == info.view->hostTexture) {
+                    image.args.isRead = image.args.isRead || info.args.isRead;
+                    image.args.isWritten = image.args.isWritten || info.args.isWritten;
+                    image.args.usedStage |= info.args.usedStage;
+                    image.args.usedFlags |= info.args.usedFlags;
+
+                    if (image.usage == texture::RenderPassUsage::Descriptor && info.usage == texture::RenderPassUsage::RenderTarget) {
+                        static std::once_flag flag{};
+                        std::call_once(flag, [](){
+                            LOGWNF("Attachment feedback loops are unimplemented!");
+                        });
+                        image.usage = texture::RenderPassUsage::AttachmentFeedbackLoop;
+                    }
+
+                    return;
+                } else if (image.view->texture == info.view->texture) {
+                    LOGE("Multiple variants of the same texture are used in the same RP call, this is invalid!");
+                }
+            }
+
+            allImages.emplace_back(info);
+        }};
+
+        for (auto &sampledImage : sampledImages)
+            if (sampledImage.first)
+                addOrMergeImage({
+                    .view = sampledImage.first,
+                    .args = sampledImage.second,
+                    .usage = texture::RenderPassUsage::Descriptor
+                });
+
+        for (auto colorAttachment : colorAttachments) {
+            if (colorAttachment)
+                addOrMergeImage({
+                    .view = colorAttachment,
+                    .args = {
+                        .isRead = true,
+                        .isWritten = true,
+                        .usedStage = vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                        .usedFlags = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite
+                    },
+                    .usage = texture::RenderPassUsage::RenderTarget
+                });
+        }
+
+        if (depthStencilAttachment)
+            addOrMergeImage({
+                .view = depthStencilAttachment,
+                .args = {
+                    .isRead = true,
+                    .isWritten = true,
+                    .usedStage = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests,
+                    .usedFlags = vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite
+                },
+                .usage = texture::RenderPassUsage::RenderTarget
+            });
 
         bool newRenderPass{renderPass == nullptr || renderPass->renderArea != renderArea ||
-            !ranges::all_of(outputAttachmentViews, [this](auto view) { return !view || view->hostTexture->ValidateRenderPassUsage(renderPassIndex, texture::RenderPassUsage::RenderTarget); }) ||
-            !ranges::all_of(sampledImages, [this](auto view) { return !view.first || view.first->hostTexture->ValidateRenderPassUsage(renderPassIndex, texture::RenderPassUsage::Descriptor); })};
+            std::ranges::any_of(allImages, [&](auto &image) { return image.view->hostTexture->ValidateRenderPassUsage(renderPassIndex, image.usage, image.args.isWritten); })};
+
+        gpu.textureUsageTracker.EnableIncrementing(false);
 
         if (!newRenderPass)
             // Try to bind the new attachments to the current render pass, we can avoid creating a new render pass if the attachments are compatible
-            newRenderPass = !renderPass->BindAttachments(colorAttachments, depthStencilAttachment.first);
+            newRenderPass = !renderPass->BindAttachments(colorAttachments, depthStencilAttachment);
 
         if (newRenderPass) {
             // We need to create a render pass if one doesn't already exist or the current one isn't compatible
             FinishRenderPass();
 
-            if (!transferPass.active)
-                CreateTransferPass();
-
-            for (auto &view : sampledImages)
-                if (view.first)
-                    view.first->RequestSync(*this, view.second);
-
-            for (auto &view : colorAttachments) {
-                if (view) {
-                    view->RequestSync(*this, colorAttachmentSync);
-                    view->hostTexture->usedInRP = true;
-                }
+            for (auto &image : allImages) {
+                image.view->RequestSync(*this, image.args);
+                if (image.usage == texture::RenderPassUsage::RenderTarget)
+                    image.view->hostTexture->usedInRP = true;
             }
 
-            if (depthStencilAttachment.first) {
-                depthStencilAttachment.first->RequestSync(*this, depthStencilAttachment.second);
-                depthStencilAttachment.first->hostTexture->usedInRP = true;
-            }
-
-            renderPass = &std::get<node::RenderPassNode>(slot->nodes.emplace_back(std::in_place_type_t<node::RenderPassNode>(), renderArea, colorAttachments, depthStencilAttachment.first));
+            renderPass = &std::get<node::RenderPassNode>(slot->nodes.emplace_back(std::in_place_type_t<node::RenderPassNode>(), renderArea, colorAttachments, depthStencilAttachment));
             subpassCount = 1;
             renderPassIt = std::prev(slot->nodes.end());
         } else {
-            transferPass.ignoreCompat = true;
-
-            node::SyncNode *rpSyncNode{&std::get<node::SyncNode>(slot->nodes.emplace_back(std::in_place_type_t<node::SyncNode>()))};
-            //rpSyncNode->deps = vk::DependencyFlagBits::eByRegion;
-
-            for (auto &view : sampledImages)
-                if (view.first)
-                    view.first->RequestSync(*this, view.second);
-
-            for (auto &view : colorAttachments)
-                if (view)
-                    view->RequestRPSync(*this, colorAttachmentSync, rpSyncNode);
-
-            if (depthStencilAttachment.first)
-                depthStencilAttachment.first->RequestRPSync(*this, depthStencilAttachment.second, rpSyncNode);
-
-            transferPass.ignoreCompat = false;
+            for (auto &image : allImages) {
+                image.view->RequestSync(*this, image.args);
+                if (image.usage == texture::RenderPassUsage::RenderTarget)
+                    image.view->hostTexture->usedInRP = true;
+            }
         }
 
-        renderPass->UpdateDependency(srcStageMask, dstStageMask);
+        gpu.textureUsageTracker.EnableIncrementing(true);
 
-        for (auto view : outputAttachmentViews)
-            if (view)
-                view->hostTexture->UpdateRenderPassUsage(renderPassIndex, texture::RenderPassUsage::RenderTarget);
+        if (srcStageMask || dstStageMask)
+            renderPass->UpdateDependency(srcStageMask, dstStageMask);
 
-        for (auto view : sampledImages)
-            if (view.first)
-                view.first->hostTexture->UpdateRenderPassUsage(renderPassIndex, texture::RenderPassUsage::Descriptor);
+        for (auto &image : allImages)
+            image.view->hostTexture->UpdateRenderPassUsage(renderPassIndex, image.usage);
 
         return newRenderPass;
     }
@@ -403,17 +444,20 @@ namespace skyline::gpu::interconnect {
     void CommandExecutor::CreateTransferPass() {
         FinishRenderPass();
 
-        transferPass.active = true;
-
         transferPass.preStagingCopyNode = &std::get<node::SyncNode>(slot->nodes.emplace_back(std::in_place_type_t<node::SyncNode>()));
         transferPass.stagingCopyNode = &std::get<node::SyncNode>(slot->nodes.emplace_back(std::in_place_type_t<node::SyncNode>()));
         transferPass.toStagingIt = std::prev(slot->nodes.end());
         transferPass.postStagingCopyNode = &std::get<node::SyncNode>(slot->nodes.emplace_back(std::in_place_type_t<node::SyncNode>()));
         transferPass.fromStagingIt = std::prev(slot->nodes.end());
 
-        for (const auto &attachedTexture : ranges::views::concat(attachedTextures, preserveAttachedTextures))
-            for (auto &host : attachedTexture.texture->hosts)
-                host.usedInTP = false;
+        for (const auto &attachedTexture : ranges::views::concat(attachedTextures, preserveAttachedTextures)) {
+            for (auto &host : attachedTexture.texture->hosts) {
+                host.writtenInTP = false;
+                host.writtenSinceTP = false;
+                host.readInTP = false;
+                host.readSinceTP = false;
+            }
+        }
     }
 
     void CommandExecutor::FinishRenderPass() {
@@ -436,6 +480,11 @@ namespace skyline::gpu::interconnect {
     CommandExecutor::LockedTexture::LockedTexture(std::shared_ptr<Texture> texture) : texture{std::move(texture)} {}
 
     constexpr CommandExecutor::LockedTexture::LockedTexture(CommandExecutor::LockedTexture &&other) noexcept : texture{std::exchange(other.texture, nullptr)} {}
+
+    CommandExecutor::LockedTexture::~LockedTexture() {
+        if (texture)
+            texture->unlock();
+    }
 
     bool CommandExecutor::AttachTextureView(HostTextureView *view) {
         bool didLock{view->LockWithTag(executionTag)};
@@ -515,12 +564,29 @@ namespace skyline::gpu::interconnect {
         cycle->AttachObject(dependency);
     }
 
-    void CommandExecutor::AddSubpass(ExecutorCommand function, vk::Rect2D renderArea, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, span<HostTextureView *> colorAttachments, TextureSyncRequestArgs colorAttachmentSync, std::pair<HostTextureView *, TextureSyncRequestArgs> depthStencilAttachment, vk::PipelineStageFlags srcStageMask, vk::PipelineStageFlags dstStageMask) {
-        bool newRenderpass{CreateRenderPassWithAttachments(renderArea, sampledImages, colorAttachments, colorAttachmentSync, depthStencilAttachment, srcStageMask, dstStageMask)};
+    void CommandExecutor::AddSubpass(ExecutorCommand function, vk::Rect2D renderArea, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, span<HostTextureView *> colorAttachments, HostTextureView * depthStencilAttachment, vk::PipelineStageFlags srcStageMask, vk::PipelineStageFlags dstStageMask) {
+        bool newRenderpass{CreateRenderPassWithAttachments(renderArea, sampledImages, colorAttachments, depthStencilAttachment, srcStageMask, dstStageMask)};
         slot->nodes.emplace_back(std::in_place_type_t<node::FunctionNode>(), std::forward<decltype(function)>(function));
 
         if (slot->nodes.size() >= *state.settings->executorFlushThreshold && newRenderpass)
             Submit();
+    }
+
+    void CommandExecutor::AddTransferSubpass() {
+        auto postTransferPass{std::next(transferPass.fromStagingIt)};
+
+        transferPass.preStagingCopyNode = &std::get<node::SyncNode>(*slot->nodes.emplace(postTransferPass, std::in_place_type_t<node::SyncNode>()));
+        transferPass.stagingCopyNode = &std::get<node::SyncNode>(*slot->nodes.emplace(postTransferPass, std::in_place_type_t<node::SyncNode>()));
+        transferPass.toStagingIt = std::prev(postTransferPass);
+        transferPass.postStagingCopyNode = &std::get<node::SyncNode>(*slot->nodes.emplace(postTransferPass, std::in_place_type_t<node::SyncNode>()));
+        transferPass.fromStagingIt = std::prev(postTransferPass);
+
+        for (const auto &attachedTexture : ranges::views::concat(attachedTextures, preserveAttachedTextures)) {
+            for (auto &host : attachedTexture.texture->hosts) {
+                host.writtenInTP = false;
+                host.readInTP = false;
+            }
+        }
     }
 
     void CommandExecutor::AddOutsideRpCommand(ExecutorCommand function) {
@@ -553,43 +619,8 @@ namespace skyline::gpu::interconnect {
         slot->pendingRenderPassEndNodes.emplace_back(std::in_place_type_t<node::FunctionNode>(), std::forward<decltype(function)>(function));
     }
 
-    void CommandExecutor::AddRPTextureBarrier(HostTexture &toWait, const TextureSyncRequestArgs &args, node::SyncNode *toWaitWith) {
-        if (!args.isWritten && (toWait.trackingInfo.waitedStages & args.usedStage))
-            return;
-
-        vk::PipelineStageFlags srcStages{toWait.trackingInfo.lastUsedStage};
-        if (args.isWritten)
-            srcStages |= toWait.trackingInfo.waitedStages;
-
-        toWaitWith->srcStages |= srcStages;
-
-        toWaitWith->dstStages |= args.usedStage;
-
-        toWaitWith->imageBarriers.emplace_back(vk::ImageMemoryBarrier{
-            .image = toWait.GetImage(),
-            .srcAccessMask = toWait.trackingInfo.lastUsedAccessFlag,
-            .dstAccessMask = args.usedFlags,
-            .oldLayout = toWait.GetLayout(),
-            .newLayout = toWait.GetLayout(),
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .subresourceRange = {
-                .aspectMask = toWait.format->vkAspect,
-                .levelCount = toWait.texture.guest.levelCount,
-                .layerCount = toWait.texture.guest.layerCount
-            }
-        });
-
-        toWait.usedInTP = true;
-
-        if (!toWaitWith->active)
-            toWaitWith->active = true;
-
-        renderPass->UpdateSelfDependency(srcStages, args.usedStage, toWait.trackingInfo.lastUsedAccessFlag, args.usedFlags);
-    }
-
     void CommandExecutor::AddTextureBarrier(HostTexture &toWait, const TextureSyncRequestArgs &args) {
-        if (!transferPass.ignoreCompat && (!transferPass.active || toWait.usedInTP))
+        if (toWait.RequiresNewTP(args.isWritten) && !toWait.usedInRP)
             CreateTransferPass();
 
         transferPass.preStagingCopyNode->srcStages |= toWait.trackingInfo.lastUsedStage;
@@ -598,29 +629,18 @@ namespace skyline::gpu::interconnect {
 
         transferPass.preStagingCopyNode->dstStages |= args.usedStage;
 
-        transferPass.preStagingCopyNode->imageBarriers.emplace_back(vk::ImageMemoryBarrier{
-            .image = toWait.GetImage(),
-            .srcAccessMask = toWait.trackingInfo.lastUsedAccessFlag,
-            .dstAccessMask = args.usedFlags,
-            .oldLayout = toWait.GetLayout(),
-            .newLayout = toWait.GetLayout(),
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .subresourceRange = {
-                .aspectMask = toWait.format->vkAspect,
-                .levelCount = toWait.texture.guest.levelCount,
-                .layerCount = toWait.texture.guest.layerCount
-            }
-        });
+        transferPass.preStagingCopyNode->imageBarriers.emplace_back(toWait.GetMemoryBarrier(toWait.trackingInfo.lastUsedAccessFlag, args.usedFlags));
 
         if (!transferPass.preStagingCopyNode->active)
             transferPass.preStagingCopyNode->active = true;
 
-        toWait.usedInTP = true;
+        toWait.readInTP = toWait.readInTP || args.isReadInTP;
+        toWait.readSinceTP = toWait.readSinceTP || args.isRead;
+        toWait.writtenSinceTP = args.isWritten;
     }
 
     void CommandExecutor::AddTextureTransferCommand(HostTexture &toWait, const TextureSyncRequestArgs &args, ExecutorCommand function) {
-        if (!transferPass.ignoreCompat && (!transferPass.active || toWait.usedInTP))
+        if (toWait.RequiresNewTP(args.isWritten) && !toWait.usedInRP)
             CreateTransferPass();
 
         transferPass.preStagingCopyNode->srcStages |= toWait.trackingInfo.lastUsedStage;
@@ -629,20 +649,7 @@ namespace skyline::gpu::interconnect {
 
         transferPass.preStagingCopyNode->dstStages |= vk::PipelineStageFlagBits::eTransfer;
 
-        transferPass.preStagingCopyNode->imageBarriers.emplace_back(vk::ImageMemoryBarrier{
-            .image = toWait.GetImage(),
-            .srcAccessMask = toWait.trackingInfo.lastUsedAccessFlag,
-            .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
-            .oldLayout = toWait.GetLayout(),
-            .newLayout = toWait.GetLayout(),
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .subresourceRange = {
-                .aspectMask = toWait.format->vkAspect,
-                .levelCount = toWait.texture.guest.levelCount,
-                .layerCount = toWait.texture.guest.layerCount
-            }
-        });
+        transferPass.preStagingCopyNode->imageBarriers.emplace_back(toWait.GetMemoryBarrier(toWait.trackingInfo.lastUsedAccessFlag, vk::AccessFlagBits::eTransferWrite));
 
         if (!transferPass.preStagingCopyNode->active)
             transferPass.preStagingCopyNode->active = true;
@@ -651,31 +658,21 @@ namespace skyline::gpu::interconnect {
 
         transferPass.postStagingCopyNode->dstStages |= args.usedStage;
 
-        transferPass.postStagingCopyNode->imageBarriers.emplace_back(vk::ImageMemoryBarrier{
-            .image = toWait.GetImage(),
-            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-            .dstAccessMask = args.usedFlags,
-            .oldLayout = toWait.GetLayout(),
-            .newLayout = toWait.GetLayout(),
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .subresourceRange = {
-                .aspectMask = toWait.format->vkAspect,
-                .levelCount = toWait.texture.guest.levelCount,
-                .layerCount = toWait.texture.guest.layerCount
-            }
-        });
+        transferPass.postStagingCopyNode->imageBarriers.emplace_back(toWait.GetMemoryBarrier(vk::AccessFlagBits::eTransferWrite, args.usedFlags));
 
         if (!transferPass.postStagingCopyNode->active)
             transferPass.postStagingCopyNode->active = true;
 
         slot->nodes.emplace(transferPass.fromStagingIt, std::in_place_type_t<node::FunctionNode>(), std::forward<decltype(function)>(function));
 
-        toWait.usedInTP = true;
+        toWait.readInTP = toWait.readInTP || args.isReadInTP;
+        toWait.readSinceTP = toWait.readSinceTP || args.isRead;
+        toWait.writtenInTP = true;
+        toWait.writtenSinceTP = args.isWritten;
     }
 
-    void CommandExecutor::AddStagedTextureTransferCommand(HostTexture &toWait, const TextureSyncRequestArgs &args, ExecutorCommand preStagingFunction, ExecutorCommand postStagingFunction) {
-        if (!transferPass.ignoreCompat && (!transferPass.active || toWait.usedInTP))
+    void CommandExecutor::AddStagedTextureTransferCommand(HostTexture &toWait, const TextureSyncRequestArgs &args, const memory::StagingBuffer &stagingBuffer, ExecutorCommand preStagingFunction, ExecutorCommand postStagingFunction) {
+        if (toWait.RequiresNewTP(args.isWritten) && !toWait.usedInRP)
             CreateTransferPass();
 
         transferPass.preStagingCopyNode->srcStages |= toWait.trackingInfo.lastUsedStage | vk::PipelineStageFlagBits::eTransfer;
@@ -683,20 +680,7 @@ namespace skyline::gpu::interconnect {
             transferPass.preStagingCopyNode->srcStages |= toWait.trackingInfo.waitedStages;
         transferPass.preStagingCopyNode->dstStages |= vk::PipelineStageFlagBits::eTransfer;
 
-        transferPass.preStagingCopyNode->imageBarriers.emplace_back(vk::ImageMemoryBarrier{
-            .image = toWait.GetImage(),
-            .srcAccessMask = toWait.trackingInfo.lastUsedAccessFlag,
-            .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
-            .oldLayout = toWait.GetLayout(),
-            .newLayout = toWait.GetLayout(),
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .subresourceRange = {
-                .aspectMask = toWait.format->vkAspect,
-                .levelCount = toWait.texture.guest.levelCount,
-                .layerCount = toWait.texture.guest.layerCount
-            }
-        });
+        transferPass.preStagingCopyNode->imageBarriers.emplace_back(toWait.GetMemoryBarrier(toWait.trackingInfo.lastUsedAccessFlag, vk::AccessFlagBits::eTransferWrite));
 
         if (!transferPass.preStagingCopyNode->active)
             transferPass.preStagingCopyNode->active = true;
@@ -705,8 +689,8 @@ namespace skyline::gpu::interconnect {
         transferPass.stagingCopyNode->dstStages |= vk::PipelineStageFlagBits::eTransfer;
 
         transferPass.stagingCopyNode->bufferBarriers.emplace_back(vk::BufferMemoryBarrier{
-            .buffer = toWait.texture.syncStagingBuffer->vkBuffer,
-            .size = toWait.texture.syncStagingBuffer->size(),
+            .buffer = stagingBuffer.vkBuffer,
+            .size = stagingBuffer.size(),
             .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
             .dstAccessMask = vk::AccessFlagBits::eTransferRead,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -719,20 +703,7 @@ namespace skyline::gpu::interconnect {
         transferPass.postStagingCopyNode->srcStages |= vk::PipelineStageFlagBits::eTransfer;
         transferPass.postStagingCopyNode->dstStages |= args.usedStage;
 
-        transferPass.postStagingCopyNode->imageBarriers.emplace_back(vk::ImageMemoryBarrier{
-            .image = toWait.GetImage(),
-            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-            .dstAccessMask = args.usedFlags,
-            .oldLayout = toWait.GetLayout(),
-            .newLayout = toWait.GetLayout(),
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .subresourceRange = {
-                .aspectMask = toWait.format->vkAspect,
-                .levelCount = toWait.texture.guest.levelCount,
-                .layerCount = toWait.texture.guest.layerCount
-            }
-        });
+        transferPass.postStagingCopyNode->imageBarriers.emplace_back(toWait.GetMemoryBarrier(vk::AccessFlagBits::eTransferWrite, args.usedFlags));
 
         if (!transferPass.postStagingCopyNode->active)
             transferPass.postStagingCopyNode->active = true;
@@ -740,7 +711,10 @@ namespace skyline::gpu::interconnect {
         slot->nodes.emplace(transferPass.toStagingIt, std::in_place_type_t<node::FunctionNode>(), std::forward<decltype(preStagingFunction)>(preStagingFunction));
         slot->nodes.emplace(transferPass.fromStagingIt, std::in_place_type_t<node::FunctionNode>(), std::forward<decltype(postStagingFunction)>(postStagingFunction));
 
-        toWait.usedInTP = true;
+        toWait.readInTP = toWait.readInTP || args.isReadInTP;
+        toWait.readSinceTP = toWait.readSinceTP || args.isRead;
+        toWait.writtenInTP = true;
+        toWait.writtenSinceTP = args.isWritten;
     }
 
     void CommandExecutor::AddFullBarrier() {
@@ -751,14 +725,14 @@ namespace skyline::gpu::interconnect {
 
     void CommandExecutor::AddClearColorSubpass(vk::Rect2D renderArea, HostTextureView *attachment, const vk::ClearColorValue &value) {
         if (!renderPass || !renderPass->ClearColorAttachment(attachment, value, gpu)) {
-            CreateRenderPassWithAttachments(renderArea, {}, attachment, {}, {nullptr, {}});
+            CreateRenderPassWithAttachments(renderArea, {}, attachment, {});
             renderPass->ClearColorAttachment(attachment, value, gpu);
         }
     }
 
     void CommandExecutor::AddClearDepthStencilSubpass(vk::Rect2D renderArea, HostTextureView *attachment, const vk::ClearDepthStencilValue &value) {
         if (!renderPass || !renderPass->ClearDepthStencilAttachment(attachment, value, gpu)) {
-            CreateRenderPassWithAttachments(renderArea, {}, {}, {}, {attachment, {}});
+            CreateRenderPassWithAttachments(renderArea, {}, {}, attachment);
             renderPass->ClearDepthStencilAttachment(attachment, value, gpu);
         }
     }
@@ -801,9 +775,6 @@ namespace skyline::gpu::interconnect {
             slot->nodes.splice(slot->nodes.end(), slot->pendingRenderPassEndNodes);
             slot->nodes.splice(slot->nodes.end(), slot->pendingPostRenderPassNodes);
         }
-        transferPass.toStagingIt = {};
-        transferPass.fromStagingIt = {};
-        transferPass.active = false;
 
         slot->WaitReady();
 
@@ -812,9 +783,9 @@ namespace skyline::gpu::interconnect {
 
         for (const auto &attachedTexture : ranges::views::concat(attachedTextures, preserveAttachedTextures)) {
             attachedTexture.texture->OnExecStart(*this);
-            slot->nodes.emplace_back(std::in_place_type_t<node::FunctionNode>(), [attachedTexture = attachedTexture.texture](vk::raii::CommandBuffer &, const std::shared_ptr<FenceCycle> &, GPU &){attachedTexture->OnExecEnd();});
 
-            attachedTexture.texture->AttachCycle(cycle);
+            if (attachedTexture.texture->syncStagingBuffer)
+                attachedTexture.texture->syncStagingBuffer = nullptr;
         }
 
         for (const auto &attachedBuffer : ranges::views::concat(attachedBuffers, preserveAttachedBuffers)) {
@@ -902,6 +873,8 @@ namespace skyline::gpu::interconnect {
             std::unique_lock lock{mutex};
             cv.wait(lock, [&gpuDone] { return gpuDone; });
         }
+
+        CreateTransferPass();
     }
 
     void CommandExecutor::AddDeferredAction(std::function<void()> &&callback) {

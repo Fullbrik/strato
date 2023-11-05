@@ -18,7 +18,8 @@ namespace skyline::gpu {
         enum class RenderPassUsage : u8 {
             None,
             Descriptor,
-            RenderTarget
+            RenderTarget,
+            AttachmentFeedbackLoop
         };
     }
 
@@ -37,11 +38,11 @@ namespace skyline::gpu {
     }
 
     struct TextureSyncRequestArgs {
+        bool isReadInTP{false};
         bool isRead;
         bool isWritten;
         vk::PipelineStageFlags usedStage;
         vk::AccessFlags usedFlags;
-        vk::ImageLayout optimalLayout; // TODO: use this
     };
 
     /**
@@ -87,16 +88,10 @@ namespace skyline::gpu {
         bool try_lock();
 
         /**
-         * @brief Performs ondemand synchronization of the texture, using an executor
-         * @note If want to synchronize the texture without the executor you can use Texture::SynchronizeGuest or Texture::SynchronizeHost
+         * @brief Performs ondemand synchronization of the texture, using a CommandExecutor
+         * @note If you want to synchronize the texture without a CommandExecutor you can use Texture::SynchronizeHost
          */
         void RequestSync(interconnect::CommandExecutor &executor, const TextureSyncRequestArgs &args);
-
-        /**
-         * @brief Performs ondemand synchronization of the texture, using an executor
-         * @note If want to synchronize the texture without the executor you can use Texture::SynchronizeGuest or Texture::SynchronizeHost
-         */
-        void RequestRPSync(interconnect::CommandExecutor &executor, const TextureSyncRequestArgs &args, interconnect::node::SyncNode *syncNode);
     };
 
     class Texture;
@@ -121,9 +116,12 @@ namespace skyline::gpu {
         u32 lastRenderPassIndex{}; //!< The index of the last render pass that used this `HostTexture`
         texture::RenderPassUsage lastRenderPassUsage{texture::RenderPassUsage::None}; //!< The type of usage in the last render pass
         vk::ImageLayout layout;
+        texture::Format guestFormat; //!< The format used by the guest, this will differ from `format` if the host doesn't support this
         texture::Format format;
-        std::vector<texture::MipLevelLayout> copyLayouts;
-        u32 copySize;
+        bool needsDecompression; //!< If the guest format is compressed and needs to be decompressed before being used on the host
+        std::vector<texture::MipLevelLayout> guestMipLayouts; //!< The layout of mipmaps with the guest format
+        std::optional<std::vector<texture::MipLevelLayout>> hostMipLayouts; //!< The layout of mipmaps with the host format (only used if the guest and host formats differ from each other)
+        u32 copySize; //!< The size of the surface given linear tiling with the guest format
 
         std::vector<HostTextureView *> views;
 
@@ -159,15 +157,13 @@ namespace skyline::gpu {
         /**
          * @return A vector of all the buffer image copies that need to be done for every aspect of every level of every layer of the texture
          */
-        boost::container::small_vector<vk::BufferImageCopy, 10> GetBufferImageCopies();
+        std::vector<vk::BufferImageCopy> GetBufferImageCopies();
 
-        void RequestSync(interconnect::CommandExecutor &executor, const TextureSyncRequestArgs &args, vk::ImageSubresourceRange &viewRange, interconnect::node::SyncNode *syncNode);
+        void RequestSync(interconnect::CommandExecutor &executor, const TextureSyncRequestArgs &args, vk::ImageSubresourceRange &viewRange);
 
       public:
         texture::Dimensions dimensions;
         vk::SampleCountFlagBits sampleCount;
-        texture::Format guestFormat; //!< The format used by the guest, this will differ from `format` if the host doesn't support this
-        bool needsDecompression; //!< If the guest format is compressed and needs to be decompressed before being used on the host
         vk::ImageType imageType;
         static constexpr vk::ImageTiling tiling{vk::ImageTiling::eOptimal}; //!< Code for linear tiled textures kept in case if it's useful later on
         vk::ImageCreateFlags flags;
@@ -179,30 +175,34 @@ namespace skyline::gpu {
             vk::PipelineStageFlags waitedStages{};
         } trackingInfo;
 
-        bool usedInTP{};
-        bool usedInRP{};
+        bool pendingSync{};
+        bool isUTpending{}; //!< If it's known that the texture is going to be synced by Usagetracker and that sync with variants should be changed for it
+        bool writtenInTP{}; //!< If the texture was written in the last transfer pass
+        bool writtenSinceTP{}; //!< If the texture was written since the last transfer pass
+        bool readInTP{}; //!< If the texture was read in the last transfer pass
+        bool readSinceTP{}; //!< If the texture was read since the last transfer pass
+        bool usedInRP{}; //!< If true writes and reads to the texture will not be synchronized using barriers
 
         static vk::ImageType ConvertViewType(vk::ImageViewType viewType, texture::Dimensions dimensions);
 
         /**
          * @brief Checks if the previous usage in the renderpass is compatible with the current one
-         * @return If the new usage is compatible with the previous usage
+         * @return If the new usage isn't compatible with the previous usage
          */
-        bool ValidateRenderPassUsage(u32 renderPassIndex, texture::RenderPassUsage renderPassUsage);
+        bool ValidateRenderPassUsage(u32 renderPassIndex, texture::RenderPassUsage renderPassUsage, bool isWrite);
 
         /**
          * @brief Updates renderpass usage tracking information
          */
-        void UpdateRenderPassUsage(u32 renderPassIndex, texture::RenderPassUsage renderPassUsage);
+        constexpr void UpdateRenderPassUsage(u32 renderPassIndex, texture::RenderPassUsage renderPassUsage) {
+            lastRenderPassUsage = renderPassUsage;
+            lastRenderPassIndex = renderPassIndex;
+        }
 
-        /**
-         * @return The last usage of the texture
-         */
-        texture::RenderPassUsage GetLastRenderPassUsage();
-
-        bool RequiresRPBreak(bool isDescriptor);
+        bool RequiresNewTP(bool willWrite);
 
         constexpr const vk::ImageLayout GetLayout() const {
+            // TODO: resolve layouts
             if (layout == vk::ImageLayout::eUndefined)
                 return vk::ImageLayout::eGeneral;
             else
@@ -216,12 +216,29 @@ namespace skyline::gpu {
 
         ~HostTexture();
 
-        void Access(const vk::raii::CommandBuffer &commandBuffer, const ExecutorTrackingInfo &trackingInfo, vk::PipelineStageFlags dstStage, vk::AccessFlags dstAccess, bool forWrite);
-
-        void AccessForTransfer(const vk::raii::CommandBuffer &commandBuffer, const ExecutorTrackingInfo &trackingInfo, bool forWrite);
-
         constexpr const vk::Image GetImage() const {
             return backing.vkImage;
+        }
+
+        inline constexpr vk::ImageMemoryBarrier GetMemoryBarrier(vk::AccessFlags srcAccesses, vk::AccessFlags dstAccesses) const {
+            return GetMemoryBarrier(srcAccesses, dstAccesses, GetLayout(), GetLayout());
+        }
+
+        inline constexpr vk::ImageMemoryBarrier GetMemoryBarrier(vk::AccessFlags srcAccesses, vk::AccessFlags dstAccesses, vk::ImageLayout oldLayout, vk::ImageLayout newLayout) const {
+            return {
+                .image = GetImage(),
+                .srcAccessMask = srcAccesses,
+                .dstAccessMask = dstAccesses,
+                .oldLayout = oldLayout,
+                .newLayout = newLayout,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .subresourceRange = {
+                    .aspectMask = format->vkAspect,
+                    .levelCount = guest.levelCount,
+                    .layerCount = guest.layerCount
+                }
+            };
         }
     };
 }

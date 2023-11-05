@@ -49,16 +49,16 @@ namespace skyline::gpu {
 
         GPU &gpu;
         std::list<TextureMapping> textures; //!< A sorted vector of all texture mappings
-        std::vector<TextureMapping> texturesPendingDestruction; //!< A vector of textures that will be destroyed once execution is submitted
+        std::vector<std::shared_ptr<Texture>> texturesPendingDestruction; //!< A vector of textures that will be destroyed once execution is submitted
 
         std::optional<memory::Image> nullImage;
         vk::raii::ImageView nullImageView{nullptr}; //!< A cached null texture view to avoid unnecessary recreation
 
         std::shared_ptr<Texture> CreateTexture(TextureViewRequestInfo &info, bool mutableFormat = false);
 
-        void DestroyTexture(const std::shared_ptr<Texture> &texture);
+        void DestroyTexture(const std::list<TextureMapping>::iterator &texture);
 
-        HostTextureView *FindOrCreateView(const std::shared_ptr<Texture> &texture, TextureViewRequestInfo &&info, vk::ImageSubresourceRange &viewRange);
+        HostTextureView *FindOrCreateView(const std::list<TextureMapping>::iterator &it, TextureViewRequestInfo &&info, vk::ImageSubresourceRange &viewRange);
 
         SpinLock mutex; //!< The mutex used to lock the texture manager, this is used to prevent concurrent lookups and (re)creation of textures
 

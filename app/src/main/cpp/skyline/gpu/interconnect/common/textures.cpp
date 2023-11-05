@@ -82,7 +82,7 @@ namespace skyline::gpu::interconnect {
                 TIC_FORMAT_CASE_ST(ticFormat, skFormat, Float)
 
         // Ignore the swizzle components of the format word
-        // FIXME: Don't do this
+        // FIXME: Use the packComponents field as it was intended
         format.packComponents = srgb; // Reuse the packComponents field to store the srgb flag
         switch ((format.Raw() & TextureImageControl::FormatWord::FormatColorComponentPadMask)) {
             TIC_FORMAT_CASE_NORM_INT(R8, R8);
@@ -161,7 +161,7 @@ namespace skyline::gpu::interconnect {
 
             default:
                 if (format.Raw())
-                    LOGE("Cannot translate TIC format: 0x{:X}", static_cast<u32>(format.Raw()));
+                    LOGE("Cannot translate TIC format: 0x{:X}, components: R: 0x{:X}, G: 0x{:X}, B: 0x{:X}, A: 0x{:X}", static_cast<u32>(format.format), static_cast<u32>(format.componentR), static_cast<u32>(format.componentG), static_cast<u32>(format.componentB), static_cast<u32>(format.componentA));
                 return {};
         }
 
@@ -191,7 +191,7 @@ namespace skyline::gpu::interconnect {
                 case TextureImageControl::ImageSwizzle::OneFloat:
                 case TextureImageControl::ImageSwizzle::OneInt:
                     return vk::ComponentSwizzle::eOne;
-                default:
+                [[unlikely]] default:
                     LOGE("Invalid swizzle: {:X}", static_cast<u32>(swizzle));
                     return vk::ComponentSwizzle::eZero;
             }
@@ -229,35 +229,35 @@ namespace skyline::gpu::interconnect {
 
         if (!texture || texture->stale || isStorage) {
             texture::Format format;
-            if (isStorage && overrideFormat != Shader::ImageFormat::Typeless) {
-                switch (overrideFormat) {
-                    case Shader::ImageFormat::R8_UINT:
-                        format = format::R8Uint;
-                        break;
-                    case Shader::ImageFormat::R8_SINT:
-                        format = format::R8Sint;
-                        break;
-                    case Shader::ImageFormat::R16_UINT:
-                        format = format::R16Uint;
-                        break;
-                    case Shader::ImageFormat::R16_SINT:
-                        format = format::R16Sint;
-                        break;
-                    case Shader::ImageFormat::R32_UINT:
-                        format = format::R32Uint;
-                        break;
-                    case Shader::ImageFormat::R32G32_UINT:
-                        format = format::R32G32Uint;
-                        break;
-                    case Shader::ImageFormat::R32G32B32A32_UINT:
-                        format = format::R32G32B32A32Uint;
-                        break;
-                    [[unlikely]] default:
-                        LOGE("Invalid storage image format: 0x{:X}", static_cast<u32>(overrideFormat));
-                }
-            } else {
+            //if (isStorage && overrideFormat != Shader::ImageFormat::Typeless) {
+            //    switch (overrideFormat) {
+            //        case Shader::ImageFormat::R8_UINT:
+            //            format = format::R8Uint;
+            //            break;
+            //        case Shader::ImageFormat::R8_SINT:
+            //            format = format::R8Sint;
+            //            break;
+            //        case Shader::ImageFormat::R16_UINT:
+            //            format = format::R16Uint;
+            //            break;
+            //        case Shader::ImageFormat::R16_SINT:
+            //            format = format::R16Sint;
+            //            break;
+            //        case Shader::ImageFormat::R32_UINT:
+            //            format = format::R32Uint;
+            //            break;
+            //        case Shader::ImageFormat::R32G32_UINT:
+            //            format = format::R32G32Uint;
+            //            break;
+            //        case Shader::ImageFormat::R32G32B32A32_UINT:
+            //            format = format::R32G32B32A32Uint;
+            //            break;
+            //        [[unlikely]] default:
+            //            LOGE("Invalid storage image format: 0x{:X}", static_cast<u32>(overrideFormat));
+            //    }
+            //} else {
                 format = ConvertTicFormat(textureHeader.formatWord, textureHeader.srgbConversion);
-            }
+            //}
             if (!format)
                 return nullptr;
 
@@ -269,7 +269,7 @@ namespace skyline::gpu::interconnect {
 
             switch (textureHeader.headerType) {
                 case TextureImageControl::HeaderType::BlockLinear:
-                    if (textureHeader.lowAddress.gobDepthOffset != 0)
+                    if (textureHeader.lowAddress.gobDepthOffset != 0) [[unlikely]]
                         LOGW("Gob Depth offsets are not supported! (0x{:X})", static_cast<u8>(textureHeader.lowAddress.gobDepthOffset));
 
                     tileConfig = {
@@ -282,7 +282,7 @@ namespace skyline::gpu::interconnect {
                 case TextureImageControl::HeaderType::Pitch:
                     tileConfig = {
                         .mode = texture::TileMode::Pitch,
-                        .pitch = static_cast<u32>(textureHeader.tileConfig.pitch20To5 << 5U)
+                        .pitch = static_cast<u32>(textureHeader.tileConfig.pitch20To5) << 5U
                     };
                     break;
                 [[unlikely]] default:
@@ -305,7 +305,8 @@ namespace skyline::gpu::interconnect {
                     layerCount = textureHeader.depthMinusOne + 1;
                     break;
                 case TextureImageControl::TextureType::e1DBuffer:
-                    throw exception("1D Buffers are not supported");
+                    LOGW("1D Buffers are not implemented");
+                    return nullptr;
                 case TextureImageControl::TextureType::e2DNoMipmap:
                     levelCount = 1;
                     viewMipBase = 0;
@@ -372,12 +373,12 @@ namespace skyline::gpu::interconnect {
 
             u32 layerStride{texture::CalculateLayerStride(sampleDimensions, format, tileConfig, levelCount, layerCount)};
             texture::Mappings mappings{ctx.channelCtx.asCtx->gmmu.TranslateRange(textureHeader.Iova(), layerStride * layerCount)};
-            if (mappings.empty() || std::none_of(mappings.begin(), mappings.end(), [](const auto &mapping) { return mapping.valid(); })) [[unlikely]] {
+            if (mappings.empty() || std::ranges::none_of(mappings, [](const auto &mapping) { return mapping.valid(); })) [[unlikely]] {
                 LOGW("Unmapped texture in TIC pool: 0x{:X}", textureHeader.Iova());
                 return nullptr;
             }
 
-            //!< Image views from storage images can only be created with the identity swizzle
+            // Image views from storage images can only be created with the identity swizzle
             auto swizzle{isStorage ? vk::ComponentMapping{} : ConvertTicSwizzleMapping(textureHeader.formatWord, format->swizzleMapping)};
 
             texture = ctx.gpu.texture.FindOrCreate({
@@ -400,7 +401,7 @@ namespace skyline::gpu::interconnect {
             });
         }
 
-        //!< Don't attempt to cache storage images
+        // Don't attempt to cache storage images
         if (!isStorage)
             textureHeaderCache[index] = {textureHeader, texture, ctx.channelCtx.channelSequenceNumber};
         return texture;

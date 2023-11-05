@@ -166,7 +166,7 @@ namespace skyline::gpu::interconnect {
         /**
          * @brief A wrapper of a Texture object that has been locked beforehand and must be unlocked afterwards
          */
-        struct LockedTexture : std::enable_shared_from_this<LockedTexture> {
+        struct LockedTexture {
             std::shared_ptr<Texture> texture;
 
             explicit LockedTexture(std::shared_ptr<Texture> texture);
@@ -174,6 +174,8 @@ namespace skyline::gpu::interconnect {
             LockedTexture(const LockedTexture &) = delete;
 
             constexpr LockedTexture(LockedTexture &&other) noexcept;
+
+            ~LockedTexture();
         };
 
         std::vector<LockedTexture> preserveAttachedTextures;
@@ -212,9 +214,7 @@ namespace skyline::gpu::interconnect {
          * @brief Create a new render pass with the specified attachments or reuses the current render pass if compatible
          * @return If a new render pass was created or not
          */
-        bool CreateRenderPassWithAttachments(vk::Rect2D renderArea, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, span<HostTextureView *> colorAttachments, TextureSyncRequestArgs colorAttachmentSync, std::pair<HostTextureView *, TextureSyncRequestArgs> depthStencilAttachment, vk::PipelineStageFlags srcStageMask = {}, vk::PipelineStageFlags dstStageMask = {});
-
-        void CreateTransferPass();
+        bool CreateRenderPassWithAttachments(vk::Rect2D renderArea, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, span<HostTextureView *> colorAttachments, HostTextureView *depthStencilAttachment, vk::PipelineStageFlags srcStageMask = {}, vk::PipelineStageFlags dstStageMask = {});
 
         /**
          * @brief Execute all the nodes and submit the resulting command buffer to the GPU
@@ -243,13 +243,11 @@ namespace skyline::gpu::interconnect {
         bool captureNextExecution{};
         UsageTracker usageTracker{};
         struct TransferPass {
-            bool active{};
-            bool ignoreCompat{};
-            node::SyncNode *preStagingCopyNode{};
-            std::list<node::NodeVariant, LinearAllocator<node::NodeVariant>>::iterator toStagingIt;
-            node::SyncNode *stagingCopyNode{};
-            std::list<node::NodeVariant, LinearAllocator<node::NodeVariant>>::iterator fromStagingIt;
-            node::SyncNode *postStagingCopyNode{};
+            node::SyncNode *preStagingCopyNode{}; //!< The first barrier of a transfer pass, if a transfer is done the barrier for the texture for previous reads/writes will be placed here, normal texture barriers will also be placed here
+            node::SyncNode *stagingCopyNode{}; //!< The second barrier will make the results of copies into the staging buffer avalable to be copied out, unused otherwise
+            std::list<node::NodeVariant, LinearAllocator<node::NodeVariant>>::iterator toStagingIt; //!< An iterator to the above node
+            node::SyncNode *postStagingCopyNode{}; //!< The last barrier makes the results of transfers into the texture available for later commands
+            std::list<node::NodeVariant, LinearAllocator<node::NodeVariant>>::iterator fromStagingIt; //!< An iterator to the above node
         } transferPass{};
 
         CommandExecutor(const DeviceState &state);
@@ -299,13 +297,16 @@ namespace skyline::gpu::interconnect {
          */
         void AttachDependency(const std::shared_ptr<void> &dependency);
 
+        void CreateTransferPass();
+
         /**
          * @brief Adds a command that needs to be executed inside a subpass configured with certain attachments
-         * @param exclusiveSubpass If this subpass should be the only subpass in a render pass
          * @note Any supplied texture should be attached prior and not undergo any persistent layout transitions till execution
          * @note Any texture views may be nullptr, in which case the texture will be ignored
          */
-        void AddSubpass(ExecutorCommand function, vk::Rect2D renderArea, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, span<HostTextureView *> colorAttachments = {}, TextureSyncRequestArgs colorAttachmentSync = {}, std::pair<HostTextureView *, TextureSyncRequestArgs> depthStencilAttachment = {}, vk::PipelineStageFlags srcStageMask = {}, vk::PipelineStageFlags dstStageMask = {});
+        void AddSubpass(ExecutorCommand function, vk::Rect2D renderArea, span<std::pair<HostTextureView *, TextureSyncRequestArgs>> sampledImages, span<HostTextureView *> colorAttachments, HostTextureView *depthStencilAttachment = {}, vk::PipelineStageFlags srcStageMask = {}, vk::PipelineStageFlags dstStageMask = {});
+
+        void AddTransferSubpass();
 
         /**
          * @brief Adds a subpass that clears the entirety of the specified attachment with a color value, it may utilize VK_ATTACHMENT_LOAD_OP_CLEAR for a more efficient clear when possible
@@ -359,13 +360,11 @@ namespace skyline::gpu::interconnect {
          */
         void FinishRenderPass();
 
-        void AddRPTextureBarrier(HostTexture &toWait, const TextureSyncRequestArgs &args, node::SyncNode *toWaitWith);
-
         void AddTextureBarrier(HostTexture &toWait, const TextureSyncRequestArgs &args);
 
         void AddTextureTransferCommand(HostTexture &toWait, const TextureSyncRequestArgs &args, ExecutorCommand function);
 
-        void AddStagedTextureTransferCommand(HostTexture &toWait, const TextureSyncRequestArgs &args, ExecutorCommand preStagingFunction, ExecutorCommand postStagingFunction);
+        void AddStagedTextureTransferCommand(HostTexture &toWait, const TextureSyncRequestArgs &args, const memory::StagingBuffer &stagingBuffer, ExecutorCommand preStagingFunction, ExecutorCommand postStagingFunction);
 
         /**
          * @brief Adds a full pipeline barrier to the command buffer

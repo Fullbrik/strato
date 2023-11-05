@@ -11,6 +11,7 @@ namespace skyline::gpu::interconnect::node {
     }
 
     bool RenderPassNode::BindAttachments(span<HostTextureView *> pColorAttachments, HostTextureView *pDepthStencilAttachment) {
+        // TODO: This may be incorrect in cases when the 1st draw wants to discard writes using an empty attachment and 2nd draw providing an attachment to the same slot
         size_t subsetAttachmentCount{std::min(colorAttachments.size(), pColorAttachments.size())};
         bool isColorCompatible{std::equal(colorAttachments.begin(), colorAttachments.begin() + static_cast<ssize_t>(subsetAttachmentCount), pColorAttachments.begin(), pColorAttachments.begin() + static_cast<ssize_t>(subsetAttachmentCount), [](const auto &oldView, const auto &newView) {
             if (oldView && newView && oldView->view != newView)
@@ -147,16 +148,10 @@ namespace skyline::gpu::interconnect::node {
         for (const auto &attachment : colorAttachments) {
             if (attachment && attachment->view && attachment->view->texture)
                 addAttachment(*attachment);
-            else if (attachment && attachment->view && !attachment->view->texture) {
-                LOGE("Destroyed texture at render pass time!");
+            else
                 attachmentReferences.emplace_back(vk::AttachmentReference{
                     .attachment = VK_ATTACHMENT_UNUSED,
-                    .layout = vk::ImageLayout::eUndefined,
-                });
-            } else
-                attachmentReferences.emplace_back(vk::AttachmentReference{
-                    .attachment = VK_ATTACHMENT_UNUSED,
-                    .layout = vk::ImageLayout::eUndefined,
+                    .layout = vk::ImageLayout::eUndefined
                 });
         }
 
@@ -204,11 +199,11 @@ namespace skyline::gpu::interconnect::node {
                 .pAttachments = vkAttachments.data(),
                 .width = renderArea.extent.width + static_cast<u32>(renderArea.offset.x),
                 .height = renderArea.extent.height + static_cast<u32>(renderArea.offset.y),
-                .layers = 1,
+                .layers = 1
             },
             vk::FramebufferAttachmentsCreateInfo{
                 .attachmentImageInfoCount = static_cast<u32>(attachmentInfo.size()),
-                .pAttachmentImageInfos = attachmentInfo.data(),
+                .pAttachmentImageInfos = attachmentInfo.data()
             }
         };
 
@@ -223,11 +218,11 @@ namespace skyline::gpu::interconnect::node {
                 .framebuffer = framebuffer,
                 .renderArea = renderArea,
                 .clearValueCount = static_cast<u32>(clearValues.size()),
-                .pClearValues = clearValues.data(),
+                .pClearValues = clearValues.data()
             },
             vk::RenderPassAttachmentBeginInfo{
                 .attachmentCount = static_cast<u32>(vkAttachments.size()),
-                .pAttachments = vkAttachments.data(),
+                .pAttachments = vkAttachments.data()
             }
         };
 

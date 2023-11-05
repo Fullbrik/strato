@@ -39,9 +39,13 @@ namespace skyline::gpu::interconnect::kepler_compute {
         samplers.Update(ctx, qmd.samplerIndex == soc::gm20b::engine::kepler_compute::QMD::SamplerIndex::ViaHeaderIndex);
         auto *pipeline{pipelineState.Update(ctx, builder, textures, constantBuffers.boundConstantBuffers, qmd)};
 
+        ctx.gpu.textureUsageTracker.EnableIncrementing(false);
+
         vk::PipelineStageFlags srcStageMask{}, dstStageMask{};
         auto *descUpdateInfo{pipeline->SyncDescriptors(ctx, constantBuffers.boundConstantBuffers, samplers, textures, srcStageMask, dstStageMask)};
         builder.SetPipeline(*pipeline->compiledPipeline.pipeline, vk::PipelineBindPoint::eCompute);
+
+        ctx.gpu.textureUsageTracker.EnableIncrementing(true);
 
         if (descUpdateInfo) {
             if (ctx.gpu.traits.supportsPushDescriptors) {

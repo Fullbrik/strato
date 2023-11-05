@@ -52,7 +52,7 @@ namespace skyline::soc::gm20b::engine::fermi2d {
                 /* 123
                    456 */
 
-                // Since we don't implement MSAA, we can avoid any scaling at all by setting using a scale factor of 1
+                // Since we don't implement MSAA, we can avoid any scaling at all by setting a scale factor of 1
                 duDx = dvDy = 1.0f;
             }
 

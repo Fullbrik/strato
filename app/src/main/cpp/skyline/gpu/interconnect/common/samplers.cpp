@@ -46,6 +46,9 @@ namespace skyline::gpu::interconnect {
                 return vk::Filter::eNearest;
             case TextureSamplerControl::Filter::Linear:
                 return vk::Filter::eLinear;
+            [[unlikely]] default:
+                LOGE("Invalid sampler filter: 0x{:X}!", static_cast<u32>(filter));
+                return vk::Filter::eNearest;
         }
     }
 
@@ -58,6 +61,9 @@ namespace skyline::gpu::interconnect {
                 return vk::SamplerMipmapMode::eNearest;
             case TextureSamplerControl::MipFilter::Linear:
                 return vk::SamplerMipmapMode::eLinear;
+            [[unlikely]] default:
+                LOGE("Invalid sampler mip filter: 0x{:X}!", static_cast<u32>(filter));
+                return vk::SamplerMipmapMode::eNearest;
         }
     }
 

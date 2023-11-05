@@ -183,12 +183,7 @@ namespace skyline::gpu::interconnect {
                     .usedStage = vk::PipelineStageFlagBits::eFragmentShader,
                     .usedFlags = vk::AccessFlagBits::eShaderRead}}};
                 executor.AddSubpass(std::forward<decltype(executionCallback)>(executionCallback), {{static_cast<i32>(dstRectX), static_cast<i32>(dstRectY)}, {dstRectWidth, dstRectHeight}},
-                                    sampledImage, {dstTextureView}, {
-                                        .isRead = false,
-                                        .isWritten = true,
-                                        .usedStage = vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                                        .usedFlags = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eColorAttachmentWrite
-                                    });
+                                    sampledImage, {dstTextureView}, {});
             }
         );
         executor.AddCheckpoint("After blit");

@@ -242,17 +242,12 @@ namespace skyline::gpu::interconnect::maxwell3d {
                                                                   (clearSurface.bEnable ? vk::ColorComponentFlagBits::eB : vk::ColorComponentFlags{}) |
                                                                   (clearSurface.aEnable ? vk::ColorComponentFlagBits::eA : vk::ColorComponentFlags{}),
                                                                   {clearEngineRegisters.colorClearValue}, view, [&view, &executor = ctx.executor, &renderArea](auto &&executionCallback) {
-                        executor.AddSubpass(std::forward<decltype(executionCallback)>(executionCallback), renderArea, {}, {view}, {
-                            .isRead = false,
-                            .isWritten = true,
-                            .usedStage = vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                            .usedFlags = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eColorAttachmentWrite
-                        });
+                        executor.AddSubpass(std::forward<decltype(executionCallback)>(executionCallback), renderArea, {}, {view}, {});
                     });
                     ctx.executor.NotifyPipelineChange();
                 } else {
                     //ctx.executor.AddClearColorSubpass(renderArea, view, {clearEngineRegisters.colorClearValue});
-                    clearAttachments.push_back({.aspectMask = vk::ImageAspectFlagBits::eColor, .clearValue = {clearEngineRegisters.colorClearValue}});
+                    clearAttachments.emplace_back(vk::ClearAttachment{.aspectMask = vk::ImageAspectFlagBits::eColor, .clearValue = {clearEngineRegisters.colorClearValue}});
                     colorView = view;
                 }
             }
@@ -271,49 +266,23 @@ namespace skyline::gpu::interconnect::maxwell3d {
                 };
 
                 // TODO: We could get rp clears to work with either stencil or depth separately
-                if (needsAttachmentClearCmd(view) || (!clearSurface.stencilEnable && viewHasStencil) || (!clearSurface.zEnable && viewHasDepth)) {
-                    clearAttachments.push_back({.aspectMask = clearAspectMask, .clearValue = clearValue});
+                //if (needsAttachmentClearCmd(view) || (!clearSurface.stencilEnable && viewHasStencil) || (!clearSurface.zEnable && viewHasDepth)) {
+                    clearAttachments.emplace_back(vk::ClearAttachment{.aspectMask = clearAspectMask, .clearValue = clearValue});
                     depthStencilView = view;
-                } else {
+                //} else {
                     //ctx.executor.AddClearDepthStencilSubpass(renderArea, view, clearValue);
-                    clearAttachments.push_back({.aspectMask = clearAspectMask, .clearValue = clearValue});
-                    depthStencilView = view;
-                }
+                //}
             }
         }
 
         if (!clearAttachments.empty()) {
             ctx.executor.AddSubpass([clearAttachments, clearRects](vk::raii::CommandBuffer &commandBuffer, const std::shared_ptr<FenceCycle> &, GPU &) {
                 commandBuffer.clearAttachments(clearAttachments, span(clearRects).first(clearAttachments.size()));
-            }, renderArea, {}, {colorView},{
-                .isRead = false,
-                .isWritten = true,
-                .usedStage = vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                .usedFlags = vk::AccessFlagBits::eColorAttachmentWrite
-            }, {depthStencilView, {
-                .isRead = false,
-                .isWritten = true,
-                .usedStage = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests,
-                .usedFlags = vk::AccessFlagBits::eDepthStencilAttachmentWrite
-            }});
+            }, renderArea, {}, colorView ? span<HostTextureView *>{colorView} : span<HostTextureView *>{}, depthStencilView);
         }
 
         ctx.executor.AddCheckpoint("After clear");
     }
-
-    constexpr TextureSyncRequestArgs colorDrawSyncRequestArgs{
-        .isRead = true,
-        .isWritten = true,
-        .usedStage = vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eColorAttachmentOutput,
-        .usedFlags = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite
-    };
-
-    constexpr TextureSyncRequestArgs depthStencilDrawSyncRequestArgs{
-        .isRead = true,
-        .isWritten = true,
-        .usedStage = vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests,
-        .usedFlags = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite
-    };
 
     void Maxwell3D::Draw(engine::DrawTopology topology, bool transformFeedbackEnable, bool indexed, u32 count, u32 first, u32 instanceCount, u32 vertexOffset, u32 firstInstance) {
         TRACE_EVENT("gpu", "Draw", "indexed", indexed, "count", count, "instanceCount", instanceCount);
@@ -371,7 +340,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
 
             if (drawParams->transformFeedbackEnable)
                 commandBuffer.endTransformFeedbackEXT(0, {}, {});
-        }, scissor, activeDescriptorSetSampledImages, activeState.GetColorAttachments(), colorDrawSyncRequestArgs, {activeState.GetDepthAttachment(), depthStencilDrawSyncRequestArgs}, srcStageMask, dstStageMask);
+        }, scissor, activeDescriptorSetSampledImages, activeState.GetColorAttachments(), activeState.GetDepthAttachment(), srcStageMask, dstStageMask);
         ctx.executor.AddCheckpoint("After draw");
     }
 
@@ -434,7 +403,7 @@ namespace skyline::gpu::interconnect::maxwell3d {
 
             if (drawParams->transformFeedbackEnable)
                 commandBuffer.endTransformFeedbackEXT(0, {}, {});
-        }, scissor, activeDescriptorSetSampledImages, activeState.GetColorAttachments(), colorDrawSyncRequestArgs, {activeState.GetDepthAttachment(), depthStencilDrawSyncRequestArgs}, srcStageMask, dstStageMask);
+        }, scissor, activeDescriptorSetSampledImages, activeState.GetColorAttachments(), activeState.GetDepthAttachment(), srcStageMask, dstStageMask);
         ctx.executor.AddCheckpoint("After indirect draw");
     }
 

@@ -18,24 +18,26 @@ namespace skyline::gpu {
 
         auto texture{std::make_shared<Texture>(gpu, info, mutableFormat)};
         texture->SetupGuestMappings();
-        textures.push_back({.texture = texture->shared_from_this(),
-                               .mappings = info.mappings});
+        textures.emplace_back(TextureMapping{.texture = texture->shared_from_this(), .mappings = info.mappings});
 
         return texture;
     }
 
-    void TextureManager::DestroyTexture(const std::shared_ptr<Texture> &texture) {
+    void TextureManager::DestroyTexture(const std::list<TextureMapping>::iterator &it) {
+        auto &texture{it->texture};
         for (const auto &host : texture->hosts)
             for (auto &view : host.views)
                 view->stale = true;
 
         texture->stale = true;
 
-        texturesPendingDestruction.push_back({.texture = texture->shared_from_this(),
-                                                 .mappings = texture->guest.mappings});
+        texturesPendingDestruction.emplace_back(texture->shared_from_this());
+
+        textures.erase(it);
     }
 
-    HostTextureView *TextureManager::FindOrCreateView(const std::shared_ptr<Texture> &texture, TextureViewRequestInfo &&info, vk::ImageSubresourceRange &viewRange) {
+    HostTextureView *TextureManager::FindOrCreateView(const std::list<TextureMapping>::iterator &it, TextureViewRequestInfo &&info, vk::ImageSubresourceRange &viewRange) {
+        auto &texture{it->texture};
         ContextLock lock{info.tag, *texture};
         auto &targetHost{texture->hosts.front()};
         auto &targetGuest{texture->guest};
@@ -43,7 +45,7 @@ namespace skyline::gpu {
 
         if (texture->isRT && !info.isRT) {
             if (targetGuest.mipLayouts[viewRange.baseMipLevel].dimensions > info.viewFormat->GetDimensionsInBytes(info.sampleDimensions)) {
-                DestroyTexture(texture);
+                DestroyTexture(it);
 
                 targetTexture = CreateTexture(info, texture->mutableFormat);
                 ContextLock newLock{info.tag, *targetTexture};
@@ -66,7 +68,9 @@ namespace skyline::gpu {
             return view;
 
         // We need to create a successor texture with host mutability to allow for the view to be created
-        DestroyTexture(targetTexture);
+        DestroyTexture(std::ranges::find_if(textures, [&targetTexture](const auto texture) {
+            return texture.texture.get() == targetTexture.get();
+        }));
         auto successor{CreateTexture(info, true)};
         return successor->FindOrCreateView(info, viewRange, actualBaseMip);
     }
@@ -76,15 +80,9 @@ namespace skyline::gpu {
     void TextureManager::DestroyStaleTextures() {
         std::unique_lock texlock{mutex};
 
-        ranges::for_each(texturesPendingDestruction, [&](const auto &texture) {
-            std::erase_if(textures, [&](const auto &element) {
-                return element.texture.get() == texture.texture.get();
-            });
-        });
-
-        // FIXME: We have to make sure this is the only remaining reference to the texture, we don't want the cycle waiter to destroy the texture because that can cause deadlocks
-        std::erase_if(texturesPendingDestruction, [](const auto &element) {
-            return element.texture.use_count() == 1;
+        // FIXME: We have to make sure this is the only remaining reference to the texture, we don't want the cycle waiter to destroy the texture because that will cause deadlocks
+        std::erase_if(texturesPendingDestruction, [](const auto &texture) {
+            return texture.use_count() == 1;
         });
     }
 
@@ -108,11 +106,12 @@ namespace skyline::gpu {
          * 5) Create a new texture and insert it in the map then return it
          */
 
-        for (auto &texture : textures) {
-            auto &targetGuest{texture.texture->guest};
+        for (auto it{textures.begin()}; it != textures.end(); ++it) {
+            auto &texture{it->texture};
+            auto &targetGuest{texture->guest};
 
-            if (!texture.texture->stale && targetGuest.Contains(info.mappings)) {
-                auto &targetHost{texture.texture->hosts.front()};
+            if (!texture->stale && targetGuest.Contains(info.mappings)) {
+                auto &targetHost{texture->hosts.front()};
 
                 if (targetHost.format->IsCompressed() != info.viewFormat->IsCompressed())
                     continue;
@@ -122,10 +121,10 @@ namespace skyline::gpu {
                 if (!subresource)
                     continue;
 
-                if (texture.texture->isRT == info.isRT && targetGuest.mipLayouts[subresource->baseMipLevel].dimensions != info.viewFormat->GetDimensionsInBytes(info.sampleDimensions))
+                if (texture->isRT == info.isRT && targetGuest.mipLayouts[subresource->baseMipLevel].dimensions != info.viewFormat->GetDimensionsInBytes(info.sampleDimensions))
                     continue;
 
-                if (texture.texture->isRT && !info.isRT && targetGuest.mipLayouts[subresource->baseMipLevel].dimensions < info.viewFormat->GetDimensionsInBytes(info.sampleDimensions))
+                if (texture->isRT && !info.isRT && targetGuest.mipLayouts[subresource->baseMipLevel].dimensions < info.viewFormat->GetDimensionsInBytes(info.sampleDimensions))
                     continue;
 
                 if (!info.imageDimensions) {
@@ -133,7 +132,7 @@ namespace skyline::gpu {
                     info.sampleCount = targetHost.sampleCount;
                 }
 
-                return FindOrCreateView(texture.texture, std::forward<decltype(info)>(info), *subresource);
+                return FindOrCreateView(it, std::forward<decltype(info)>(info), *subresource);
             }
         }
 
@@ -148,17 +147,22 @@ namespace skyline::gpu {
         newTexture->isRT = info.isRT;
 
         auto &newGuest{newTexture->guest};
-        for (auto &texture : textures) {
-            ContextLock otherLock{info.tag, *texture.texture};
-            auto &textureMappings{texture.mappings};
+        for (auto texture{textures.begin()}; texture != textures.end();) {
+            ContextLock otherLock{info.tag, *texture->texture};
+            auto &textureMappings{texture->mappings};
 
-            if (!texture.texture->stale && texture.texture.get() != newTexture.get() && newGuest.Contains(textureMappings)) {
-                auto &targetGuest{texture.texture->guest};
+            if (newGuest.Contains(textureMappings) && !texture->texture->stale && texture->texture.get() != newTexture.get()) {
+                auto &targetGuest{texture->texture->guest};
                 u32 offset{newGuest.OffsetFrom(textureMappings)}; //!< Offset of the first mapping in the source texture in the target texture
-                if (!newGuest.CalculateSubresource(targetGuest.tileConfig, offset, targetGuest.mipLayouts[0].dimensions, targetGuest.levelCount, targetGuest.layerCount, targetGuest.layerStride, info.viewFormat->vkAspect))
+                auto subresource{newGuest.CalculateSubresource(targetGuest.tileConfig, offset, targetGuest.mipLayouts[0].dimensions, targetGuest.levelCount, targetGuest.layerCount, targetGuest.layerStride, info.viewFormat->vkAspect)};
+                if (!subresource || newGuest.mipLayouts[subresource->baseMipLevel].dimensions > targetGuest.mipLayouts[0].dimensions) {
+                    ++texture;
                     continue;
+                }
 
-                DestroyTexture(texture.texture);
+                DestroyTexture(texture);
+            } else {
+                ++texture;
             }
         }
 
@@ -166,7 +170,7 @@ namespace skyline::gpu {
     }
 
     vk::ImageView TextureManager::GetNullView() {
-        if (*nullImageView)
+        if (*nullImageView) [[likely]]
             return *nullImageView;
 
         std::unique_lock lock{mutex};
@@ -181,23 +185,21 @@ namespace skyline::gpu {
         constexpr vk::ImageCreateFlags NullImageFlags{};
         constexpr vk::ImageUsageFlags NullImageUsage{vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage};
 
-        nullImage = gpu.memory.AllocateImage(
-            {
-                .flags = NullImageFlags,
-                .imageType = vk::ImageType::e2D,
-                .format = NullImageFormat->vkFormat,
-                .extent = NullImageDimensions,
-                .mipLevels = 1,
-                .arrayLayers = 1,
-                .samples = vk::SampleCountFlagBits::e1,
-                .tiling = NullImageTiling,
-                .usage = NullImageUsage,
-                .sharingMode = vk::SharingMode::eExclusive,
-                .queueFamilyIndexCount = 1,
-                .pQueueFamilyIndices = &gpu.vkQueueFamilyIndex,
-                .initialLayout = NullImageInitialLayout
-            }
-        );
+        nullImage = gpu.memory.AllocateImage({
+            .flags = NullImageFlags,
+            .imageType = vk::ImageType::e2D,
+            .format = NullImageFormat->vkFormat,
+            .extent = NullImageDimensions,
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk::SampleCountFlagBits::e1,
+            .tiling = NullImageTiling,
+            .usage = NullImageUsage,
+            .sharingMode = vk::SharingMode::eExclusive,
+            .queueFamilyIndexCount = 1,
+            .pQueueFamilyIndices = &gpu.vkQueueFamilyIndex,
+            .initialLayout = NullImageInitialLayout
+        });
 
         gpu.scheduler.Submit([&](vk::raii::CommandBuffer &commandBuffer) {
             commandBuffer.pipelineBarrier(
@@ -249,25 +251,12 @@ namespace skyline::gpu {
 
         LOGW("Texture garbage collection triggered: level: {}", level);
 
-        textures.sort([](const auto &texture, const auto &texture2) {
-            auto maxUsage{[](const std::shared_ptr<Texture> &texture) {
-                u32 maxUsage{};
-                for (auto &host : texture->hosts)
-                    if (maxUsage < host.lastRenderPassIndex)
-                        maxUsage = host.lastRenderPassIndex;
-
-                return maxUsage;
-            }};
-
-            return maxUsage(texture.texture) < maxUsage(texture2.texture);
-        });
-
         u32 i{};
         u32 maxI{static_cast<u32>(textures.size()) / 4};
-        for (auto &texture : textures) {
-            if (texture.texture->try_lock()) {
-                DestroyTexture(texture.texture);
-                texture.texture->unlock();
+        for (auto texture{textures.begin()}; texture != textures.end();) {
+            if (texture->texture->try_lock()) {
+                DestroyTexture(texture);
+                texture->texture->unlock();
             }
 
             if (i < maxI)
