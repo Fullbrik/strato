@@ -336,5 +336,57 @@ namespace skyline::nce {
             };
         };
         static_assert(sizeof(Ldr) == sizeof(u32));
+
+        /**
+         * @url https://developer.arm.com/documentation/ddi0596/2021-12/Base-Instructions/LDXR--Load-Exclusive-Register-
+         */
+        struct Ldxr {
+            union {
+                struct __attribute__((packed)) {
+                    u32 a;
+                };
+                u32 raw{};
+            };
+        };
+        static_assert(sizeof(Ldxr) == sizeof(u32));
+
+        /**
+         * @url https://developer.arm.com/documentation/ddi0596/2021-12/Base-Instructions/STXR--Store-Exclusive-Register-
+         */
+        struct Stxr {
+            union {
+                struct __attribute__((packed)) {
+                    u32 a;
+                };
+                u32 raw{};
+            };
+        };
+        static_assert(sizeof(Stxr) == sizeof(u32));
+
+        /**
+         * @url https://developer.arm.com/documentation/ddi0596/2021-12/Base-Instructions/LDAXR--Load-Acquire-Exclusive-Register-
+         */
+        struct Ldaxr {
+            union {
+                struct __attribute__((packed)) {
+                    u32 a;
+                };
+                u32 raw{};
+            };
+        };
+        static_assert(sizeof(Ldaxr) == sizeof(u32));
+
+        /**
+         * @url https://developer.arm.com/documentation/ddi0596/2021-12/Base-Instructions/STLXR--Store-Release-Exclusive-Register-
+         */
+        struct Stlxr {
+            union {
+                struct __attribute__((packed)) {
+                    u32 a;
+                };
+                u32 raw{};
+            };
+        };
+        static_assert(sizeof(Stlxr) == sizeof(u32));
     }
 }
